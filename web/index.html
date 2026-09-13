@@ -592,16 +592,23 @@ addEventListener('scroll',()=>{
   try{
    const r=await fetch(REPO+'state/latest.json?cb='+Date.now());
    if(r.ok){ const j=await r.json();
-    if(j&&j.surum===1&&j.yollar&&j.yollar.kalshi&&j.yollar.deribit) ptr=j; }
+    /* Isaretci anahtarlari surum 2'de ingilizceye gecti (docs/GLOSSARY.md).
+       Degisim boyunca iki kusak da kabul ediliyor: main'deki toplayici bir
+       sure daha surum 1 yazmaya devam edebilir ve sayfa o sirada kirilmamali. */
+    const yol=j&&(j.paths||j.yollar);
+    if(j&&(j.version===2||j.surum===1)&&yol&&yol.kalshi&&yol.deribit){ ptr=j; ptr._yol=yol; } }
   }catch(e){}
-  if(ptr){ pk=ptr.yollar.kalshi; pd=ptr.yollar.deribit; }
+  if(ptr){ pk=ptr._yol.kalshi; pd=ptr._yol.deribit; }
   else{ /* yedek: toplayici isaretciyi henuz yazmadiysa eski yol calisir */
    [pk,pd]=await Promise.all([son('raw/kalshi'),son('raw/deribit')]); }
   const [KA,D]=await Promise.all([gz(pk),gz(pd)]);
   S.KA=KA; S.D=D;
   if(ptr){
-   S.meta={pencere:ptr.fiyat_penceresi_saniye, an:ptr.snapshot_utc,
-           gun:(ptr.arsiv||{}).gun_sayisi, no:(ptr.arsiv||{}).anlik_goruntu_sayisi};
+   const ar=ptr.archive||ptr.arsiv||{};
+   S.meta={pencere:ptr.sync_window_seconds??ptr.fiyat_penceresi_saniye,
+           an:ptr.snapshot_utc,
+           gun:ar.day_count??ar.gun_sayisi,
+           no:ar.snapshot_count??ar.anlik_goruntu_sayisi};
   }else try{
    const mg=await (await fetch(API+'raw/_meta?cb='+Date.now())).json();
    const gun=mg.map(x=>x.name).sort().pop();
