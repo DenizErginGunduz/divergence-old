@@ -29,6 +29,21 @@ jobs:
 
       # Once denetleyicinin YAKALAYABILDIGINI kanitla. Hicbir seyi yakalamayan
       # bir denetleyici de yesil kalir; o yuzden bu adim asil denetimden once.
+      # Her Python dosyasi derlenebiliyor mu? Bu adim her push'ta kosuyor.
+      #
+      # Neden var: 2026-09-11'de collect.py'ye yarim kalmis bir satir islendi
+      # (kirpilmis yapistirma, kapanmamis string). Toplayici 5 kosu boyunca
+      # cokerek gecti ve iki gun boyunca hic anlik goruntu alinamadi. Kimse
+      # fark etmedi, cunku hicbir sey kirmizi yanmiyordu — zamanlanmis kosu
+      # sessizce basarisiz oluyordu.
+      #
+      # Sozdizimi hatasi en ucuz yakalanan hata turudur; onu bir sonraki
+      # zamanlanmis kosuya birakmak en pahali secimdir.
+      - name: Python dosyalari derleniyor mu
+        run: |
+          python -m compileall -q collector scripts
+          echo 'butun dosyalar derlendi'
+
       - name: Denetleyicinin kendi testi
         run: python scripts/ref_check.py --kendi-testi
 
