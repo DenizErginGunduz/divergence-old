@@ -27,11 +27,9 @@ v2 changed three things. All three because they are expensive to add later:
      assume — it makes the attempt and writes the result into pagination_worked.
      The first run tells us.
 
-v3 changes only names. Every field the collector writes is now in English; the
-vendor payloads are still stored exactly as returned. Archive version 3.
-Snapshots written before this carry the old field names; scripts/archive.py
-upgrades them at read time and scripts/migrate_archive_keys.py rewrites them
-permanently.
+The schema our own files use is versioned (ARCHIVE_VERSION below), so a reader can
+tell which shape a snapshot is in without guessing. Vendor payloads are stored
+exactly as returned and are never renamed.
 
 Unchanged rules: simultaneity comes first (D-015), vendor fields are never
 modified (rule 2), a failed stage is never hidden (rule 6).
@@ -45,7 +43,7 @@ DERIBIT = 'https://www.deribit.com/api/v2/public'
 KALSHI = 'https://external-api.kalshi.com/trade-api/v2'
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-ARCHIVE_VERSION = 3                          # field names in English from here on
+ARCHIVE_VERSION = 3                          # schema version of the files we write
 
 ASSETS = ['bitcoin', 'ethereum']             # D-034: the V1 measured universe
 DERIBIT_CURRENCIES = ['BTC', 'ETH']
