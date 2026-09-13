@@ -9,32 +9,33 @@
 # re-measured against the archive by the measure_*.py scripts one directory up.
 #
 # Do not repair this file. If you need what it did, write a new measurement on
-# top of scripts/arsiv.py.
+# top of scripts/archive.py.
 
 #!/usr/bin/env python3
 """
-skew_correction_btc.py — D-027 BORCU: BTC olcumlerini skew terimiyle yeniden hesapla
+skew_correction_btc.py — THE D-027 DEBT: redo the BTC measurements with the skew term
 
-SORUN (D-027'de SPY'da yakalandi):
-Dijital olasilik, call fiyatinin strike'a gore turevidir:
+THE PROBLEM (caught on SPY in D-027):
+The digital probability is the derivative of the call price with respect to strike:
         P(S_T > K) = -dC/dK
-Ama C, K'ya IKI yoldan bagli: dogrudan, ve IV egrisi uzerinden.
+But C depends on K TWO ways: directly, and through the IV curve.
         C = C_BS(K, sigma(K))
         dC/dK = (dC_BS/dK)|sigma  +  vega * (dsigma/dK)
                  \_____________/     \________________/
-                   -N(d2)              SKEW TERIMI
+                    -N(d2)               THE SKEW TERM
 
-Naif N(d2), ikinci terimi TAMAMEN atiyor. Skew varken (BTC'de her zaman var)
-bu sistematik bir hatadir; SPY'da sol kanatta 2,12x sapma olcmustuk.
+A naive N(d2) drops the second term ENTIRELY. When skew is present — and on BTC it
+always is — that is a systematic error; on SPY we measured a 2.12x deviation in the
+left wing.
 
-Bu betik ayni merdivenleri UC yontemle hesaplar ve yan yana koyar:
-   A) naif      : N(d2)                        <- dunku hatali yontem
-   B) skew'li   : N(d2) - vega * dsigma/dK     <- duzeltilmis analitik
-   C) modelsiz  : [C(a) - C(b)] / (b - a)      <- hicbir varsayim tasimaz, HAKEM
+This script computes the same ladders THREE ways and puts them side by side:
+   A) naive      : N(d2)                        <- yesterday's faulty method
+   B) skew-adj   : N(d2) - vega * dsigma/dK     <- the corrected analytical form
+   C) model-free : [C(a) - C(b)] / (b - a)      <- carries no assumption, the REFEREE
 
-C hakemdir. B, C'ye A'dan daha yakinsa duzeltme dogru yonde calisiyor demektir.
+C is the referee. If B lands closer to C than A does, the correction is working.
 
-Black-76 (ileri fiyat uzerinde, iskonto ihmal — vadeler <=51 gun):
+Black-76 (on the forward, discounting ignored — all expiries <= 51 days):
    d1 = (ln(F/K) + v/2) / sqrt(v),  d2 = d1 - sqrt(v),   v = sigma^2 * T
    dC/dK|sigma = -N(d2)
    vega        = F * phi(d1) * sqrt(T)
@@ -48,7 +49,7 @@ YEAR = 365.0
 
 
 def load(path):
-    """CSV'yi vade -> strike -> {mark, iv} sozlugune cevirir. IV yuzdeden ondaliga."""
+    """Turn the CSV into expiry -> strike -> {mark, iv}. IV from percent to decimal."""
     ch = {}
     for r in csv.DictReader(open(path, encoding='utf-8')):
         ch.setdefault(r['expiry'], {})[int(r['strike'])] = {
@@ -57,7 +58,8 @@ def load(path):
 
 
 def iv_at(c, K):
-    """Strike bazinda IV; tam strike yoksa komsulardan dogrusal ara deger."""
+    """IV at a strike; if the exact strike is absent, interpolate linearly between
+    its neighbours."""
     if K in c:
         return c[K]['iv']
     ks = sorted(c)
@@ -70,7 +72,7 @@ def iv_at(c, K):
 
 
 def dsigma_dK(c, K):
-    """IV egiminin merkezi farkla olcumu. Bu, D-027'de eksik olan buyukluk."""
+    """The IV slope by central difference. This is the quantity D-027 was missing."""
     ks = sorted(c)
     lo = [k for k in ks if k < K]
     hi = [k for k in ks if k > K]
@@ -81,7 +83,7 @@ def dsigma_dK(c, K):
 
 
 def probs(c, K, F, T):
-    """Ayni strike icin naif ve skew duzeltmeli olasilik + ara buyuklukler."""
+    """Naive and skew-adjusted probability for one strike, plus the intermediates."""
     s = iv_at(c, K)
     sk = dsigma_dK(c, K)
     if s is None or s <= 0 or T <= 0:
@@ -90,14 +92,15 @@ def probs(c, K, F, T):
     d1 = (math.log(F / K) + 0.5 * v) / math.sqrt(v)
     d2 = d1 - math.sqrt(v)
     naive = N(d2)
-    vega = F * PHI(d1) * math.sqrt(T)          # birim vol basina USD
+    vega = F * PHI(d1) * math.sqrt(T)          # USD per unit of vol
     corr = vega * sk if sk is not None else 0.0
     return {'naive': naive, 'skew_adj': max(0.0, min(1.0, naive - corr)),
             'vega': vega, 'dsig': sk, 'corr': corr, 'iv': s}
 
 
 def digital(c, K):
-    """Modelsiz hakem: K'yi kusatan iki strike'in call fiyat farki."""
+    """The model-free referee: the call price difference of the two strikes that
+    bracket K."""
     ks = sorted(c)
     lo = [k for k in ks if k < K]
     hi = [k for k in ks if k > K]
@@ -107,14 +110,14 @@ def digital(c, K):
     return max(0.0, min(1.0, (c[a]['mark'] - c[b]['mark']) / (b - a)))
 
 
-def rapor(baslik, c, F, T, strikes):
+def report(title, c, F, T, strikes):
     print('\n' + '=' * 96)
-    print(baslik)
+    print(title)
     print('=' * 96)
-    print('Forward %.2f   |   T = %.5f yil (%.1f gun)' % (F, T, T * YEAR))
+    print('Forward %.2f   |   T = %.5f years (%.1f days)' % (F, T, T * YEAR))
     print('%-8s %-7s %-11s %-9s %-10s %-10s %-10s %s'
-          % ('K', 'IV', 'dsig/dK', 'vega', 'A naif', 'B skewli', 'C modelsiz',
-             'naif/modelsiz'))
+          % ('K', 'IV', 'dsig/dK', 'vega', 'A naive', 'B skew-adj', 'C model-free',
+             'naive/free'))
     print('-' * 96)
     sa, sb = [], []
     for K in strikes:
@@ -129,38 +132,38 @@ def rapor(baslik, c, F, T, strikes):
                  p['naive'], p['skew_adj'], d, ra))
     print('-' * 96)
     if sa:
-        print('Hakemden ortalama sapma:  A naif = %.1f%%   ->   B skewli = %.1f%%'
+        print('Mean deviation from the referee:  A naive = %.1f%%   ->   B skew-adj = %.1f%%'
               % (100 * sum(sa) / len(sa), 100 * sum(sb) / len(sb)))
-        print('En buyuk sapma         :  A naif = %.1f%%   ->   B skewli = %.1f%%'
+        print('Largest deviation              :  A naive = %.1f%%   ->   B skew-adj = %.1f%%'
               % (100 * max(sa), 100 * max(sb)))
     return sa, sb
 
 
-# ---------------- 1) GUNLUK zincir: bridge_btc.py'nin dayandigi veri ----------------
+# ---------------- 1) DAILY chain: the data bridge_btc.py rests on ----------------
 g = load(os.path.join(BASE, 'raw', 'deribit_btc_2026-08-05T2123Z.csv'))
-SNAP_G = datetime.datetime(2026, 8, 5, 21, 22, 55, tzinfo=datetime.timezone.utc)
+SNAP_D = datetime.datetime(2026, 8, 5, 21, 22, 55, tzinfo=datetime.timezone.utc)
 T_6AUG = (datetime.datetime(2026, 8, 6, 8, 0, tzinfo=datetime.timezone.utc)
-          - SNAP_G).total_seconds() / 86400.0 / YEAR
-ks_g = [k for k in sorted(g['6AUG26']) if 60000 <= k <= 67000]
-a1, b1 = rapor('GUNLUK ZINCIR — 6AUG26 (bridge_btc.py bu veriyi kullaniyor)',
-               g['6AUG26'], 64673.90, T_6AUG, ks_g)
+          - SNAP_D).total_seconds() / 86400.0 / YEAR
+ks_d = [k for k in sorted(g['6AUG26']) if 60000 <= k <= 67000]
+a1, b1 = report('DAILY CHAIN — 6AUG26 (the data bridge_btc.py uses)',
+                g['6AUG26'], 64673.90, T_6AUG, ks_d)
 
-# ---------------- 2) AYLIK zincir: touch_premium_btc.py'nin dayandigi veri ----------
+# ---------------- 2) MONTHLY chain: the data touch_premium_btc.py rests on -------
 m = load(os.path.join(BASE, 'raw', 'deribit_btc_monthly_2026-08-05T2135Z.csv'))
 SNAP_M = datetime.datetime(2026, 8, 5, 21, 35, 12, tzinfo=datetime.timezone.utc)
 T_28AUG = (datetime.datetime(2026, 8, 28, 8, 0, tzinfo=datetime.timezone.utc)
            - SNAP_M).total_seconds() / 86400.0 / YEAR
 ks_m = [k for k in sorted(m['28AUG26']) if 52000 <= k <= 85000]
-a2, b2 = rapor('AYLIK ZINCIR — 28AUG26 (touch_premium_btc.py bu veriyi kullaniyor)',
-               m['28AUG26'], 64794.96, T_28AUG, ks_m)
+a2, b2 = report('MONTHLY CHAIN — 28AUG26 (the data touch_premium_btc.py uses)',
+                m['28AUG26'], 64794.96, T_28AUG, ks_m)
 
 print('\n' + '=' * 96)
-print('SONUC — D-027 duzeltmesinin BTC tarafindaki etkisi')
+print('CONCLUSION — what the D-027 correction does on the BTC side')
 print('=' * 96)
-for ad, A, B in (('gunluk 6AUG26', a1, b1), ('aylik 28AUG26', a2, b2)):
+for name, A, B in (('daily 6AUG26', a1, b1), ('monthly 28AUG26', a2, b2)):
     if not A:
         continue
     ia, ib = sum(A) / len(A), sum(B) / len(B)
-    print('%-16s ortalama sapma %.1f%% -> %.1f%%   (%s)'
-          % (ad, 100 * ia, 100 * ib,
-             'DUZELDI' if ib < ia else 'DUZELMEDI — incelenmeli'))
+    print('%-18s mean deviation %.1f%% -> %.1f%%   (%s)'
+          % (name, 100 * ia, 100 * ib,
+             'IMPROVED' if ib < ia else 'NOT IMPROVED — needs a look'))
