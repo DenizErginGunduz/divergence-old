@@ -70,7 +70,7 @@ def bounds(m, rule):
 
 def ladder_sum(KA, D, series, currency, rule):
     """Sum of the bucket probabilities of one ladder under the given rule."""
-    M = [m for m in (KA.get('marketler', {}).get(series) or [])
+    M = [m for m in (KA.get('markets', {}).get(series) or [])
          if m.get('status') == 'active']
     if not M:
         return None
