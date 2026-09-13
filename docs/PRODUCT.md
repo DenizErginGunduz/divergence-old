@@ -156,16 +156,12 @@ used anywhere. The language stays descriptive.
 
 ## 7. Language
 
-**Everything is in English** — the interface, the code, the documents, and the
-archive's own field names. The project was written in Turkish to begin with; that
-was fine for a notebook and wrong for something another person or another tool is
-meant to pick up. The mapping is in `GLOSSARY.md` and the reasoning in D-071.
-
-Derivatives terminology is settled in English anyway ("terminal probability",
-"touch probability", "implied"), and a reader coming to this as a portfolio piece
-reads English.
-
----
+**Everything is in English** — the interface, the code, the documents and the
+archive's own field names. Derivatives terminology is settled in English
+("terminal probability", "touch probability", "implied"), the venues publish in
+English, and a reader coming to this as a portfolio piece reads English. Keeping a
+single language end to end also means a field name on screen, in the archive and in
+a script is literally the same string.
 
 ## 8. Terminology (applies to the interface too)
 
