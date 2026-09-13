@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="topRow">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -26,7 +26,7 @@
   --text:#f0ece6; --text-2:#c9c0b4; --text-3:#9c8f7e; --text-4:#5a5148;
   --accent:#e8a33d;
   --ok:#7fb069; --warn:#c98a2e; --muted:#5a5148;
-  --yes-bg:#1e2a1e; --yes:#8fd18f; --seq-bg:#2a1e1e; --seq:#d18f8f;
+  --yes-bg:#1e2a1e; --yes:#8fd18f; --no-bg:#2a1e1e; --no:#d18f8f;
   --font:'Inter var','Inter',system-ui,-apple-system,sans-serif;
   --radius:7px; --gap:8px; --row:38px;
 }
@@ -115,7 +115,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:14
 .oc{flex:1;border-radius:4px;padding:6px 9px}
 .oc .k{font-size:9px} .oc .v{font-size:15px}
 .oc.yes{background:var(--yes-bg)} .oc.yes .k{color:#6d8a6d} .oc.yes .v{color:var(--yes)}
-.oc.seq{background:var(--seq-bg)}   .oc.seq .k{color:#8a6d6d}  .oc.seq .v{color:var(--seq)}
+.oc.no{background:var(--no-bg)}   .oc.no .k{color:#8a6d6d}  .oc.no .v{color:var(--no)}
 .nfoot{border-top:1px solid var(--line);padding-top:8px;display:flex;align-items:baseline}
 
 /* [1] asset cards */
@@ -130,8 +130,8 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:14
 .acard.none{opacity:.66}
 .icon{width:23px;height:23px;border-radius:50%;background:var(--surface-2);display:flex;
   align-items:center;justify-content:center;font-size:9px;font-weight:500;color:var(--text-3);flex-shrink:0}
-.at{display:flex;align-items:center;gap:7px;font-size:11px;margin-bottom:3px}
-.at .st{width:9px;flex-shrink:0} .at .lb{width:96px;flex-shrink:0}
+.an{display:flex;align-items:center;gap:7px;font-size:11px;margin-bottom:3px}
+.an .st{width:9px;flex-shrink:0} .an .lb{width:96px;flex-shrink:0}
 
 /* [2][3] tables */
 .sect{font-size:10px;letter-spacing:.14em;color:var(--text-3);margin:26px 0 9px}
@@ -188,7 +188,7 @@ tr.quiet td{color:var(--text-4)} tr.open td{background:var(--surface)}
     </div>
   </div>
   <div class="dateline">
-    <div id="dl-seq"   style="flex:1">NO. —</div>
+    <div id="dl-no"   style="flex:1">NO. —</div>
     <div id="dl-date" style="flex:2">loading archive…</div>
     <div id="dl-src"  style="flex:2.4">KALSHI · POLYMARKET · DERIBIT</div>
     <div id="dl-sync" style="flex:2;text-align:right">SYNC — · ARCHIVE —</div>
