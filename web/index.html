@@ -600,39 +600,23 @@ addEventListener('scroll',()=>{
   try{
    const r=await fetch(REPO+'state/latest.json?cb='+Date.now());
    if(r.ok){ const j=await r.json();
-    /* The pointer keys moved to English in version 2 (docs/GLOSSARY.md).
-       Both generations are accepted during the changeover: the collector on
-       main may keep writing version 1 for a while and the page must not break
-       in the meantime. */
-    const srcPaths=j&&(j.paths||j.yollar);
-    if(j&&(j.version===2||j.surum===1)&&srcPaths&&srcPaths.kalshi&&srcPaths.deribit){ ptr=j; ptr._paths=srcPaths; } }
+    if(j&&j.version===2&&j.paths&&j.paths.kalshi&&j.paths.deribit) ptr=j; }
   }catch(e){}
-  if(ptr){ pk=ptr._paths.kalshi; pd=ptr._paths.deribit; }
+  if(ptr){ pk=ptr.paths.kalshi; pd=ptr.paths.deribit; }
   else{ /* fallback: if the collector has not written the pointer yet, the old path works */
    [pk,pd]=await Promise.all([newestPath('raw/kalshi'),newestPath('raw/deribit')]); }
   const [KA,D]=await Promise.all([gz(pk),gz(pd)]);
-  /* Snapshots written before version 3 carry our own field names in their
-     earlier form. The upgrade happens in ONE place; below this line no old name
-     appears anywhere. Once scripts/migrate_archive_keys.py has run against every
-     copy of the archive this block can be deleted and nothing else changes. */
-  if(KA&&KA.marketler&&!KA.markets){
-   KA.markets=KA.marketler; KA.catalogue=KA.katalog;
-   KA.observed=KA.gozlem;   KA.selection=KA.secim;
-  }
   S.KA=KA; S.D=D;
   if(ptr){
-   const ar=ptr.archive||ptr.arsiv||{};
-   S.meta={syncWindow:ptr.sync_window_seconds??ptr.fiyat_penceresi_saniye,
-           at:ptr.snapshot_utc,
-           day:ar.day_count??ar.gun_sayisi,
-           seq:ar.snapshot_count??ar.anlik_goruntu_sayisi};
+   const ar=ptr.archive||{};
+   S.meta={syncWindow:ptr.sync_window_seconds, at:ptr.snapshot_utc,
+           day:ar.day_count, seq:ar.snapshot_count};
   }else try{
    const mg=await (await fetch(API+'raw/_meta?cb='+Date.now())).json();
    const day=mg.map(x=>x.name).sort().pop();
    const mf=await (await fetch(API+'raw/_meta/'+day+'?cb='+Date.now())).json();
    const m=await (await fetch(REPO+'raw/_meta/'+day+'/'+mf.map(x=>x.name).sort().pop()+'?cb='+Date.now())).json();
-   S.meta={syncWindow:m.sync_window_seconds??m.fiyat_penceresi_saniye,
-           at:m.snapshot_utc, day:mg.length};
+   S.meta={syncWindow:m.sync_window_seconds, at:m.snapshot_utc, day:mg.length};
    // NO. = total number of snapshots in the archive
    try{
     const counts=await Promise.all(mg.map(async d=>{
