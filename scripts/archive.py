@@ -35,39 +35,6 @@ class Missing(Exception):
     """The requested snapshot or stream is not in the archive."""
 
 
-# ---- legacy upgrade ---------------------------------------------------------
-# Snapshots written before archive version 3 carry our bookkeeping fields under
-# their old names. scripts/migrate_archive_keys.py rewrites those files
-# permanently; until every copy of the archive has been migrated, this reader
-# upgrades them in memory so that nothing above this line ever sees an old name.
-# Vendor fields are not involved — only labels we invented ourselves.
-#
-# This is the one place in the codebase that knows the old names. Once the
-# migration has run against every copy of the archive, including the private
-# mirror, it can be deleted and nothing else changes.
-_LEGACY_KALSHI = {'katalog': 'catalogue', 'secim': 'selection',
-                  'marketler': 'markets', 'gozlem': 'observed'}
-_LEGACY_SELECTION = {'kripto': 'crypto', 'gozlem': 'observed'}
-_LEGACY_META = {'fiyat_penceresi_saniye': 'sync_window_seconds',
-                'toplam_saniye': 'total_seconds',
-                'kaynak_anlari_saniye': 'source_marks_seconds',
-                'asama_sureleri': 'stage_seconds', 'hatalar': 'errors',
-                'tam_mi': 'complete', 'akis_ozeti': 'flow_summary',
-                'kalshi_ozeti': 'kalshi_summary', 'dosyalar': 'files',
-                'varliklar': 'assets', 'surum': 'version'}
-
-
-def _upgrade(data, table, nested=None):
-    if not isinstance(data, dict):
-        return data
-    out = {table.get(k, k): v for k, v in data.items()}
-    if nested:
-        key, sub = nested
-        if isinstance(out.get(key), dict):
-            out[key] = {sub.get(k, k): v for k, v in out[key].items()}
-    return out
-
-
 def _gz(path):
     with gzip.open(path, 'rt', encoding='utf-8') as f:
         return json.load(f)
@@ -116,8 +83,7 @@ class Snapshot(object):
 
     @property
     def kalshi(self):
-        return _upgrade(self._read('kalshi'), _LEGACY_KALSHI,
-                        ('selection', _LEGACY_SELECTION))
+        return self._read('kalshi')
 
     @property
     def deribit(self):
@@ -134,7 +100,7 @@ class Snapshot(object):
             if not os.path.isfile(path):
                 raise Missing('meta absent: %s' % self.stamp)
             with open(path, encoding='utf-8') as f:
-                self._cache['meta'] = _upgrade(json.load(f), _LEGACY_META)
+                self._cache['meta'] = json.load(f)
         return self._cache['meta']
 
     @property
