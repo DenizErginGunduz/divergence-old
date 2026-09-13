@@ -274,7 +274,7 @@ const c2=v=>v==null?'—':(v*100).toFixed(2)+'¢';
 const f2=v=>v==null?'—':v.toLocaleString('en-US',{maximumFractionDigits:2});
 
 function kovalar(KA,D,seri,para){
- const M=(KA.marketler[seri]||[]).filter(m=>m.status==='active'); if(!M.length)return null;
+ const M=(KA.markets[seri]||[]).filter(m=>m.status==='active'); if(!M.length)return null;
  const {ch,idx}=zincir(D,para), TP=Date.parse(M[0].close_time);
  const vs=Object.keys(ch).filter(e=>ch[e].C&&ch[e].P).map(l=>({l,t:van(l)}))
    .filter(x=>x.t).sort((a,b)=>a.t-b.t);
@@ -602,6 +602,14 @@ addEventListener('scroll',()=>{
   else{ /* yedek: toplayici isaretciyi henuz yazmadiysa eski yol calisir */
    [pk,pd]=await Promise.all([son('raw/kalshi'),son('raw/deribit')]); }
   const [KA,D]=await Promise.all([gz(pk),gz(pd)]);
+  /* Surum 3 oncesinde yazilan anlik goruntuler bizim kendi alan adlarimizi
+     eski haliyle tasiyor. Yukseltme TEK yerde yapiliyor; bu satirin altinda
+     hicbir yerde eski ad gecmiyor. scripts/migrate_archive_keys.py her kopyada
+     kostuktan sonra bu blok silinebilir, baska hicbir sey degismez. */
+  if(KA&&KA.marketler&&!KA.markets){
+   KA.markets=KA.marketler; KA.catalogue=KA.katalog;
+   KA.observed=KA.gozlem;   KA.selection=KA.secim;
+  }
   S.KA=KA; S.D=D;
   if(ptr){
    const ar=ptr.archive||ptr.arsiv||{};
@@ -614,7 +622,8 @@ addEventListener('scroll',()=>{
    const gun=mg.map(x=>x.name).sort().pop();
    const mf=await (await fetch(API+'raw/_meta/'+gun+'?cb='+Date.now())).json();
    const m=await (await fetch(REPO+'raw/_meta/'+gun+'/'+mf.map(x=>x.name).sort().pop()+'?cb='+Date.now())).json();
-   S.meta={pencere:m.fiyat_penceresi_saniye, an:m.snapshot_utc, gun:mg.length};
+   S.meta={pencere:m.sync_window_seconds??m.fiyat_penceresi_saniye,
+           an:m.snapshot_utc, gun:mg.length};
    // NO. = arsivdeki toplam snapshot sayisi
    try{
     const sayilar=await Promise.all(mg.map(async d=>{
@@ -628,9 +637,9 @@ addEventListener('scroll',()=>{
    try{const h=kovalar(KA,D,seri,para); if(h) S.hesap[a]=h;}catch(e){console.warn(a,e);}
   }
   // merdiven listesi: o varligin TUM canli Kalshi serileri
-  const kat=(KA.katalog&&KA.katalog.Crypto&&KA.katalog.Crypto.series)||[];
+  const kat=(KA.catalogue&&KA.catalogue.Crypto&&KA.catalogue.Crypto.series)||[];
   const bilgi=Object.fromEntries(kat.map(x=>[x.ticker,x]));
-  for(const [t,v] of Object.entries(KA.marketler||{})){
+  for(const [t,v] of Object.entries(KA.markets||{})){
    if(!Array.isArray(v)) continue;
    const akt=v.filter(m=>m.status==='active'); if(!akt.length) continue;
    const tg=(bilgi[t]&&bilgi[t].tags)||[];
