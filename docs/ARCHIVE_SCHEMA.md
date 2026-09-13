@@ -76,7 +76,7 @@ The schema our own files use is versioned: `_meta` carries a `version` field and
 **The one thing that will bite you.** Deribit options on BTC and ETH are inverse
 contracts: `bid_price`, `ask_price` and `mark_price` are quoted in units of the
 underlying, not dollars. A mark of `1.0077` on that put means 1.0077 BTC. To get
-dollars, multiply by `index_price`. Every script does this in `zincir()`; if you write
+dollars, multiply by `index_price`. Every script does this in `chain()`; if you write
 a new one and skip it, your numbers will be wrong by a factor of about 77,000 and will
 still look plausible in a ratio.
 
