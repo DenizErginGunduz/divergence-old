@@ -9,34 +9,36 @@
 # re-measured against the archive by the measure_*.py scripts one directory up.
 #
 # Do not repair this file. If you need what it did, write a new measurement on
-# top of scripts/arsiv.py.
+# top of scripts/archive.py.
 
 #!/usr/bin/env python3
 """
-ladder_health.py — MERDIVEN SAGLIK KONTROLU (dis veri gerektirmez)
+ladder_health.py — LADDER HEALTH CHECK (needs no external data)
 
-Opsiyon verisine gecmeden ONCE calistirilmasi gereken kontrol. Uc soru sorar:
+The check to run BEFORE touching option data. It asks three questions:
 
-1) MAKAS / OLCUM ORANI
-   Olcecegimiz fark birkac puan. Alis-satis makasi ondan buyukse, uretilen sayi
-   piyasa gorusu degil makasin kendisidir. Esik: makas > 0.02 ise "olculemez".
+1) SPREAD VS THE QUANTITY BEING MEASURED
+   The gap we are measuring is a few points. If the bid-ask spread is wider than
+   that, the number produced is the spread itself, not a market view.
+   Threshold: spread > 0.02 means "not measurable".
 
-2) MONOTONLUK  (model icermeyen veri kalitesi testi)
-   Ayni merdivende esik yukseldikce touch olasiligi DUSMELI (yukari yon),
-   esik dustukce DUSMELI (asagi yon). Ihlal varsa ya kotasyon bozuk ya kayit yanlis.
+2) MONOTONICITY  (a model-free data quality test)
+   Within one ladder, touch probability MUST fall as the threshold rises (upside)
+   and MUST fall as the threshold falls (downside). A violation means either the
+   quote is broken or the record is wrong.
 
-3) COZULMUS OLABILIR
-   mid >= 0.99 olan touch kontrati muhtemelen zaten gerceklesmis; `closed` bayragi
-   donmemis olabilir. Bunlar merdivenden cikarilmali, yoksa basamak bozuk kalir.
-   (Kullanicinin BTC 62.500 hipotezi — D-020.)
+3) POSSIBLY ALREADY RESOLVED
+   A touch contract with mid >= 0.99 has probably already happened; the `closed`
+   flag may simply not have come back. These have to come out of the ladder, or
+   the rung stays broken. (The user's BTC 62,500 hypothesis — D-020.)
 """
 import json, os, re, statistics
 
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 store = json.load(open(os.path.join(BASE, 'raw', '_store.json'), encoding='utf-8'))
 
-MAKAS_ESIK = 0.02      # bunun ustu: fark olculemez
-COZULMUS_ESIK = 0.99   # bunun ustu: muhtemelen gerceklesmis
+SPREAD_LIMIT = 0.02     # above this the gap is not measurable
+RESOLVED_LIMIT = 0.99   # above this it has probably already happened
 
 TICK = {'tsla': 'TSLA', 'nvda': 'NVDA', 'meta': 'META', 'spy': 'SPY',
         'aapl': 'AAPL', 'bitcoin': 'BTC'}
@@ -68,24 +70,24 @@ def ladders():
 
 
 print('=' * 94)
-print('MERDIVEN SAGLIK KONTROLU — opsiyon verisine gecmeden once')
+print('LADDER HEALTH CHECK — before moving on to option data')
 print('=' * 94)
 print('%-6s %5s %9s %9s %9s %8s %9s %s'
-      % ('VARLIK', 'basam', 'medyan', 'ortalama', 'en genis', 'olcule', 'cozulmus', 'monoton'))
+      % ('ASSET', 'rungs', 'median', 'mean', 'widest', 'measur', 'possibly', 'monotone'))
 print('%-6s %5s %9s %9s %9s %8s %9s %s'
-      % ('', '', 'makas', 'makas', 'makas', 'bilir', 'olabilir', 'ihlali'))
+      % ('', '', 'spread', 'spread', 'spread', 'able', 'resolved', 'violations'))
 print('-' * 94)
 
 report = {}
 for t, R in sorted(ladders().items()):
     sp = [r['spread'] for r in R]
-    usable = [r for r in R if r['spread'] <= MAKAS_ESIK and r['mid'] < COZULMUS_ESIK]
-    resolved = [r for r in R if r['mid'] >= COZULMUS_ESIK]
+    usable = [r for r in R if r['spread'] <= SPREAD_LIMIT and r['mid'] < RESOLVED_LIMIT]
+    resolved = [r for r in R if r['mid'] >= RESOLVED_LIMIT]
 
-    # monotonluk: yukari yonde K artarken mid azalmali; asagi yonde K azalirken mid azalmali
+    # monotonicity: upside, mid must fall as K rises; downside, mid must fall as K falls
     viol = []
     for d, keyf in (('up', lambda r: r['K']), ('down', lambda r: -r['K'])):
-        seq = sorted([r for r in R if r['dir'] == d and r['mid'] < COZULMUS_ESIK], key=keyf)
+        seq = sorted([r for r in R if r['dir'] == d and r['mid'] < RESOLVED_LIMIT], key=keyf)
         for a, b in zip(seq, seq[1:]):
             if b['mid'] > a['mid'] + 1e-9:
                 viol.append((d, a['K'], a['mid'], b['K'], b['mid']))
@@ -93,31 +95,31 @@ for t, R in sorted(ladders().items()):
     print('%-6s %5d %9.3f %9.3f %9.3f %8d %9d %s'
           % (t, len(R), statistics.median(sp), statistics.mean(sp), max(sp),
              len(usable), len(resolved), len(viol) if viol else '-'))
-    report[t] = {'basamak': len(R), 'medyan_makas': round(statistics.median(sp), 4),
-                 'en_genis_makas': round(max(sp), 4), 'olculebilir': len(usable),
-                 'cozulmus_olabilir': len(resolved),
-                 'monotonluk_ihlali': [{'yon': v[0], 'K1': v[1], 'mid1': v[2],
-                                        'K2': v[3], 'mid2': v[4]} for v in viol]}
+    report[t] = {'rungs': len(R), 'median_spread': round(statistics.median(sp), 4),
+                 'widest_spread': round(max(sp), 4), 'measurable': len(usable),
+                 'possibly_resolved': len(resolved),
+                 'monotonicity_violations': [{'direction': v[0], 'K1': v[1], 'mid1': v[2],
+                                              'K2': v[3], 'mid2': v[4]} for v in viol]}
 
 print('-' * 94)
-print('"olculebilir" = makas <= %.2f VE mid < %.2f olan basamak sayisi'
-      % (MAKAS_ESIK, COZULMUS_ESIK))
+print('"measurable" = rungs with spread <= %.2f AND mid < %.2f'
+      % (SPREAD_LIMIT, RESOLVED_LIMIT))
 print()
 
 for t, r in sorted(report.items()):
-    if r['monotonluk_ihlali']:
-        print('MONOTONLUK IHLALI — %s:' % t)
-        for v in r['monotonluk_ihlali']:
-            print('   %s yonu: K=%g mid=%.4f  ->  K=%g mid=%.4f  (olasilik ARTMIS, olamaz)'
-                  % (v['yon'], v['K1'], v['mid1'], v['K2'], v['mid2']))
+    if r['monotonicity_violations']:
+        print('MONOTONICITY VIOLATION — %s:' % t)
+        for v in r['monotonicity_violations']:
+            print('   %s side: K=%g mid=%.4f  ->  K=%g mid=%.4f  (probability ROSE, impossible)'
+                  % (v['direction'], v['K1'], v['mid1'], v['K2'], v['mid2']))
 
-print('\nCOZULMUS OLABILIR (mid >= %.2f) — merdivenden cikarilmali:' % COZULMUS_ESIK)
+print('\nPOSSIBLY RESOLVED (mid >= %.2f) — should come out of the ladder:' % RESOLVED_LIMIT)
 for t, R in sorted(ladders().items()):
-    res = [r for r in R if r['mid'] >= COZULMUS_ESIK]
+    res = [r for r in R if r['mid'] >= RESOLVED_LIMIT]
     if res:
         print('   %-6s %s' % (t, ', '.join('%s%g' % ('↑' if r['dir'] == 'up' else '↓', r['K'])
                                            for r in sorted(res, key=lambda x: x['K']))))
 
 json.dump(report, open(os.path.join(BASE, 'inventory', 'ladder_health.json'), 'w',
                        encoding='utf-8'), ensure_ascii=False, indent=1)
-print('\nYazildi: inventory/ladder_health.json')
+print('\nWritten: inventory/ladder_health.json')
