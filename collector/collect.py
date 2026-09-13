@@ -410,21 +410,27 @@ if os.path.isdir(meta_kok):
             gunluk[g] = len([x for x in os.listdir(gp) if x.endswith('.json')])
 
 gun_listesi = sorted(gunluk)
+# Anahtarlar surum 2'de ingilizceye gecti (bkz. docs/GLOSSARY.md). Bu dosya
+# her kosuda yeniden yazilan bir ISARETCIDIR, arsiv degil — o yuzden yeniden
+# adlandirmak gecmis veriyi bozmaz. Ham arsiv dosyalarinin (_meta, coverage,
+# kalshi) anahtarlari BILEREK degismedi: onlar bir kez yazilip bir daha
+# degistirilmiyor, yeniden adlandirmak iki uyumsuz dosya kusagi yaratirdi.
+# Sayfa degisim boyunca hem eski hem yeni anahtari kabul ediyor.
 isaretci = {
-    'surum': 1,
+    'version': 2,
     'snapshot_utc': zaman.isoformat(),
-    'gun': GUN,
-    'damga': DAMGA,
-    'fiyat_penceresi_saniye': PENCERE,
-    'tam_mi': len(hatalar) == 0,
-    'yollar': yollar,
-    'meta_yolu': _rel(mp),
-    'arsiv': {
-        'gun_sayisi': len(gunluk),
-        'anlik_goruntu_sayisi': sum(gunluk.values()),
-        'ilk_gun': gun_listesi[0] if gun_listesi else None,
-        'son_gun': gun_listesi[-1] if gun_listesi else None,
-        'gunluk': gunluk,
+    'day': GUN,
+    'stamp': DAMGA,
+    'sync_window_seconds': PENCERE,
+    'complete': len(hatalar) == 0,
+    'paths': yollar,
+    'meta_path': _rel(mp),
+    'archive': {
+        'day_count': len(gunluk),
+        'snapshot_count': sum(gunluk.values()),
+        'first_day': gun_listesi[0] if gun_listesi else None,
+        'last_day': gun_listesi[-1] if gun_listesi else None,
+        'per_day': gunluk,
     },
 }
 ip = os.path.join(ROOT, 'state', 'latest.json')
