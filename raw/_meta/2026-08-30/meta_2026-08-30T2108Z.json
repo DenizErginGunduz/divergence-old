@@ -1,46 +1,46 @@
 {
  "snapshot_utc": "2026-08-30T21:08:44.996659+00:00",
- "toplam_saniye": 145.67,
- "fiyat_penceresi_saniye": 1.53,
- "asama_sureleri": {
+ "total_seconds": 145.67,
+ "sync_window_seconds": 1.53,
+ "stage_seconds": {
   "deribit": 1.13,
   "polymarket_events": 0.4,
-  "akis": 143.82,
-  "holders": "atlandi (gunde bir kez)"
+  "flow": 143.82,
+  "holders": "skipped (once a day)"
  },
- "hatalar": {},
- "tam_mi": true,
- "akis_ozeti": {
-  "market": 490,
-  "kapsam_disi_market": 251,
-  "yeni_islem": 1865,
-  "limit_dolan": 164,
-  "BOSLUKLU": 1,
-  "ilk_kez": 70,
-  "sayfalama_denendi": 1,
-  "sayfalama_calisti": 1
+ "errors": {},
+ "complete": true,
+ "flow_summary": {
+  "markets": 490,
+  "out_of_scope_markets": 251,
+  "new_trades": 1865,
+  "limit_hit": 164,
+  "WITH_GAP": 1,
+  "first_time": 70,
+  "pagination_tried": 1,
+  "pagination_worked": 1
  },
- "dosyalar": [
+ "files": [
   {
-   "dosya": "raw/deribit/2026-08-30/deribit_2026-08-30T2108Z.json.gz",
-   "bayt": 71781
+   "file": "raw/deribit/2026-08-30/deribit_2026-08-30T2108Z.json.gz",
+   "bytes": 71781
   },
   {
-   "dosya": "raw/polymarket_events/2026-08-30/polymarket_events_2026-08-30T2108Z.json.gz",
-   "bayt": 336102
+   "file": "raw/polymarket_events/2026-08-30/polymarket_events_2026-08-30T2108Z.json.gz",
+   "bytes": 336102
   },
   {
-   "dosya": "raw/events/trades/2026-08-30/trades_2026-08-30T2108Z.ndjson.gz",
-   "bayt": 164237
+   "file": "raw/events/trades/2026-08-30/trades_2026-08-30T2108Z.ndjson.gz",
+   "bytes": 164237
   },
   {
-   "dosya": "raw/coverage/2026-08-30/coverage_2026-08-30T2108Z.json",
-   "bayt": 176751
+   "file": "raw/coverage/2026-08-30/coverage_2026-08-30T2108Z.json",
+   "bytes": 176751
   }
  ],
- "varliklar": [
+ "assets": [
   "bitcoin",
   "ethereum"
  ],
- "surum": 2
+ "version": 3
 }

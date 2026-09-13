@@ -1,68 +1,68 @@
 {
  "snapshot_utc": "2026-09-04T21:15:26.097878+00:00",
- "toplam_saniye": 195.26,
- "fiyat_penceresi_saniye": 1.48,
- "kaynak_anlari_saniye": {
-  "baslangic": 0.0,
-  "deribit_bitis": 1.07,
-  "polymarket_bitis": 1.48,
-  "kalshi_bitis": 53.08
+ "total_seconds": 195.26,
+ "sync_window_seconds": 1.48,
+ "source_marks_seconds": {
+  "start": 0.0,
+  "deribit_end": 1.07,
+  "polymarket_end": 1.48,
+  "kalshi_end": 53.08
  },
- "asama_sureleri": {
+ "stage_seconds": {
   "deribit": 1.06,
   "polymarket_events": 0.41,
   "kalshi": 51.61,
-  "akis": 141.07,
-  "holders": "atlandi (gunde bir kez)"
+  "flow": 141.07,
+  "holders": "skipped (once a day)"
  },
- "hatalar": {},
- "tam_mi": true,
- "akis_ozeti": {
-  "market": 402,
-  "kapsam_disi_market": 257,
-  "yeni_islem": 3079,
-  "limit_dolan": 140,
-  "BOSLUKLU": 0,
-  "ilk_kez": 34,
-  "sayfalama_denendi": 4,
-  "sayfalama_calisti": 4
+ "errors": {},
+ "complete": true,
+ "flow_summary": {
+  "markets": 402,
+  "out_of_scope_markets": 257,
+  "new_trades": 3079,
+  "limit_hit": 140,
+  "WITH_GAP": 0,
+  "first_time": 34,
+  "pagination_tried": 4,
+  "pagination_worked": 4
  },
- "kalshi_ozeti": {
-  "katalog": {
+ "kalshi_summary": {
+  "catalogue": {
    "Crypto": 274,
    "Financials": 1053
   },
-  "izlenen_kripto_seri": 62,
-  "izlenen_gozlem_seri": 30,
-  "market_donen_seri": 22,
-  "toplam_market": 6246,
-  "gozlem_market": 2145
+  "crypto_series_tracked": 62,
+  "observed_series_tracked": 30,
+  "series_returning_markets": 22,
+  "total_markets": 6246,
+  "observed_markets": 2145
  },
- "dosyalar": [
+ "files": [
   {
-   "dosya": "raw/deribit/2026-09-04/deribit_2026-09-04T2115Z.json.gz",
-   "bayt": 74918
+   "file": "raw/deribit/2026-09-04/deribit_2026-09-04T2115Z.json.gz",
+   "bytes": 74918
   },
   {
-   "dosya": "raw/polymarket_events/2026-09-04/polymarket_events_2026-09-04T2115Z.json.gz",
-   "bayt": 306589
+   "file": "raw/polymarket_events/2026-09-04/polymarket_events_2026-09-04T2115Z.json.gz",
+   "bytes": 306589
   },
   {
-   "dosya": "raw/kalshi/2026-09-04/kalshi_2026-09-04T2115Z.json.gz",
-   "bayt": 508925
+   "file": "raw/kalshi/2026-09-04/kalshi_2026-09-04T2115Z.json.gz",
+   "bytes": 508925
   },
   {
-   "dosya": "raw/events/trades/2026-09-04/trades_2026-09-04T2115Z.ndjson.gz",
-   "bayt": 283669
+   "file": "raw/events/trades/2026-09-04/trades_2026-09-04T2115Z.ndjson.gz",
+   "bytes": 283669
   },
   {
-   "dosya": "raw/coverage/2026-09-04/coverage_2026-09-04T2115Z.json",
-   "bayt": 145628
+   "file": "raw/coverage/2026-09-04/coverage_2026-09-04T2115Z.json",
+   "bytes": 145628
   }
  ],
- "varliklar": [
+ "assets": [
   "bitcoin",
   "ethereum"
  ],
- "surum": 2
+ "version": 3
 }
