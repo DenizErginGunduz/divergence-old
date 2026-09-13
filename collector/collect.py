@@ -1,461 +1,469 @@
 #!/usr/bin/env python3
 """
-collect.py v2 — DIVERGENCE TOPLAYICI, OLAY BAZLI
+collect.py v3 — DIVERGENCE COLLECTOR, EVENT-BASED
 
-v1 her kosuda her marketin son 100 islemini yeniden sakliyordu. Olcum:
-106 market, ~10.600 islem, 7,3 MB — ve medyan markette 8 saatte yalnizca ~3 yeni
-islem oluyor. Yani dosyanin neredeyse tamami kopyaydi.
+v1 re-stored the last 100 trades of every market on every run. Measured: 106
+markets, ~10,600 trades, 7.3 MB — while the median market sees only ~3 new
+trades in 8 hours. Almost the whole file was a copy.
 
-v2 uc seyi degistiriyor. Ucu de "sonradan eklemesi pahali" oldugu icin simdi:
+v2 changed three things. All three because they are expensive to add later:
 
-  1) OLAY BAZLI DEPOLAMA
-     Islemler transactionHash ile tekillenir; yalnizca YENI olanlar eklenir.
-     Boylece hangi hizda cekersek cekelim ayni depoya yaziyoruz. Anlik izleyici
-     sonradan devreye girdiginde format degistirmeye gerek kalmaz.
+  1) EVENT-BASED STORAGE
+     Trades are de-duplicated by transactionHash; only NEW ones are appended.
+     So we write to the same store no matter how fast we poll. A live watcher
+     added later will not force a format change.
 
-  2) KAPSAM KAYDI
-     Her cekim "bu marketi hangi zaman araliginda gordum" bilgisini yazar.
-     Bu olmadan sonra "islem yok" ile "biz bakmiyorduk" ayirt edilemez.
-     Bildirim urununde bu ayrim her seydir: sessizlik bilgi sanilir.
+  2) COVERAGE RECORD
+     Every fetch writes down "over which time range did I see this market".
+     Without it, "no trades" and "we were not looking" cannot be told apart.
+     In an alerting product that distinction is everything: silence gets
+     mistaken for information.
 
-  3) BOSLUK TESPITI + SAYFALAMA
-     79 market 100 sinirina dayanmisti; oncesinde gormedigimiz islemler olabilir.
-     Bir onceki su isaretinden geriye ulasamazsak BOSLUK bayragi konur ve
-     sayfalama ile kapatilmaya calisilir.
-     NOT: data-api'nin offset destegi DOGRULANMADI. Bu yuzden betik varsaymaz —
-     denemeyi yapar, sonucu `sayfalama_calisti` alanina yazar. Ilk kosu bize soyler.
+  3) GAP DETECTION + PAGINATION
+     79 markets hit the limit of 100; there may be trades before that we never
+     saw. If we cannot reach back to the previous watermark, a GAP flag is set
+     and pagination tries to close it.
+     NOTE: offset support on data-api is NOT VERIFIED. So the script does not
+     assume — it makes the attempt and writes the result into pagination_worked.
+     The first run tells us.
 
-Degismeyen kurallar: eszamanlilik once gelir (D-015), ham veri alanlari
-degistirilmez (kural 2), eksik asama gizlenmez (kural 6).
+v3 changes only names. Every field the collector writes is now in English; the
+vendor payloads are still stored exactly as returned. Archive version 3.
+Snapshots written before this carry the old field names; scripts/archive.py
+upgrades them at read time and scripts/migrate_archive_keys.py rewrites them
+permanently.
+
+Unchanged rules: simultaneity comes first (D-015), vendor fields are never
+modified (rule 2), a failed stage is never hidden (rule 6).
 """
 import json, gzip, os, re, sys, time, datetime, urllib.request
 
-UA = {'User-Agent': 'divergence-research/0.2 (+github)'}
+UA = {'User-Agent': 'divergence-research/0.3 (+github)'}
 GAMMA = 'https://gamma-api.polymarket.com'
 DATA = 'https://data-api.polymarket.com'
 DERIBIT = 'https://www.deribit.com/api/v2/public'
 KALSHI = 'https://external-api.kalshi.com/trade-api/v2'
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-VARLIKLAR = ['bitcoin', 'ethereum']          # D-034: V1 olculen evren
-DERIBIT_PARA = ['BTC', 'ETH']
-SAYFA = 100                                  # data-api limit
-MAX_SAYFA = 6                                # bosluk kapatma denemesi ust siniri
-HOLDERS_SAATI = 5                            # pozisyon sahipleri gunde BIR kez (05 UTC)
+ARCHIVE_VERSION = 3                          # field names in English from here on
 
-# Kalshi seri listesi ELLE SABITLENMEZ. Ilk denemede listeyi kesik bir
-# katalog yanitindan cikardim ve 62 BTC/ETH serisinin 42'sini kacirdim -- aralarinda
-# tam aradigimiz yillik TERMINAL kontratlar da vardi. Artik her kosuda katalogdan
-# TURETILIYOR; kaynak degisirse biz de degisiriz.
-# Kelime siniri SART: ilk surumde 'Dow' deseni 'downloads' kelimesine takildi ve
-# gozlem kovasi Netflix/Disney+ uygulama indirme marketleriyle doldu.
-KALSHI_GOZLEM_DESEN = (r'S&P 500|SPX|Nasdaq|NDX|DJIA|Dow Jones'
-                       r'|\bgold\b|\bsilver\b|\boil\b|\bcrude\b|\bWTI\b|\bBrent\b')
-KALSHI_SERI_UST_SINIR = 90        # kosu suresini sinirla
+ASSETS = ['bitcoin', 'ethereum']             # D-034: the V1 measured universe
+DERIBIT_CURRENCIES = ['BTC', 'ETH']
+PAGE = 100                                   # data-api limit
+MAX_PAGES = 6                                # cap on gap-closing attempts
+HOLDERS_HOUR = 5                             # holders fetched ONCE a day (05 UTC)
+
+# The Kalshi series list is NOT hardcoded. The first attempt derived it from a
+# truncated catalogue response and missed 42 of 62 BTC/ETH series — including the
+# annual TERMINAL contracts we were actually after. It is now DERIVED from the
+# catalogue on every run; if the source changes, we change with it.
+# Word boundaries are REQUIRED: in the first version the 'Dow' pattern matched
+# 'downloads' and the observation bucket filled with Netflix/Disney+ app-install
+# markets.
+KALSHI_OBSERVED_PATTERN = (r'S&P 500|SPX|Nasdaq|NDX|DJIA|Dow Jones'
+                           r'|\bgold\b|\bsilver\b|\boil\b|\bcrude\b|\bWTI\b|\bBrent\b')
+KALSHI_SERIES_CAP = 90            # bound the run time
 
 
-def get(url, timeout=30, deneme=3):
-    son = None
-    for i in range(deneme):
+def get(url, timeout=30, attempts=3):
+    last = None
+    for i in range(attempts):
         try:
             with urllib.request.urlopen(
                     urllib.request.Request(url, headers=UA), timeout=timeout) as r:
                 return json.loads(r.read())
         except Exception as e:
-            son = e
+            last = e
             time.sleep(1.5 * (i + 1))
-    raise RuntimeError('%s -> %s' % (url[:90], str(son)[:120]))
+    raise RuntimeError('%s -> %s' % (url[:90], str(last)[:120]))
 
 
-def yaz_gz(yol, veri):
-    os.makedirs(os.path.dirname(yol), exist_ok=True)
-    with gzip.open(yol, 'wt', encoding='utf-8') as f:
-        json.dump(veri, f, ensure_ascii=False, separators=(',', ':'))
-    return os.path.getsize(yol)
+def write_gz(path, data):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with gzip.open(path, 'wt', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, separators=(',', ':'))
+    return os.path.getsize(path)
 
 
-t0_hepsi = time.time()
-zaman = datetime.datetime.now(datetime.timezone.utc)
-DAMGA = zaman.strftime('%Y-%m-%dT%H%MZ')
-GUN = zaman.strftime('%Y-%m-%d')
+t0_all = time.time()
+now = datetime.datetime.now(datetime.timezone.utc)
+STAMP = now.strftime('%Y-%m-%dT%H%MZ')
+DAY = now.strftime('%Y-%m-%d')
 
-kova, hatalar, sureler = {}, {}, {}
+bucket, errors, durations = {}, {}, {}
 
 
-def asama(ad, fn):
+def stage(name, fn):
     t = time.time()
     try:
-        kova[ad] = fn()
+        bucket[name] = fn()
     except Exception as e:
-        hatalar[ad] = str(e)[:300]
-        print('  ! %s BASARISIZ: %s' % (ad, str(e)[:140]), file=sys.stderr)
-    sureler[ad] = round(time.time() - t, 2)
+        errors[name] = str(e)[:300]
+        print('  ! %s FAILED: %s' % (name, str(e)[:140]), file=sys.stderr)
+    durations[name] = round(time.time() - t, 2)
 
 
-# ---------------- su isareti (watermark) ----------------
-# Her market icin en son gordugumuz islem ani + o andaki hash'ler.
-# Hash listesi yalnizca SINIR anindakileri tutar; durum dosyasi boyle sisimez.
-WM_YOL = os.path.join(ROOT, 'state', 'watermark.json')
+# ---------------- watermark ----------------
+# For each market: the newest trade instant we have seen, plus the hashes at that
+# instant. Only boundary hashes are kept, so the state file does not grow.
+WM_PATH = os.path.join(ROOT, 'state', 'watermark.json')
 try:
-    with open(WM_YOL, encoding='utf-8') as f:
+    with open(WM_PATH, encoding='utf-8') as f:
         WM = json.load(f)
 except Exception:
     WM = {}
 
 
-# ---------------- 1. Deribit: call + put, iki para ----------------
+# ---------------- 1. Deribit: calls + puts, both currencies ----------------
 def deribit():
     out = {}
-    for p in DERIBIT_PARA:
-        out[p] = {
+    for c in DERIBIT_CURRENCIES:
+        out[c] = {
             'book_summary': get('%s/get_book_summary_by_currency?currency=%s&kind=option'
-                                % (DERIBIT, p), timeout=60),
-            'index': get('%s/get_index_price?index_name=%s_usd' % (DERIBIT, p.lower())),
+                                % (DERIBIT, c), timeout=60),
+            'index': get('%s/get_index_price?index_name=%s_usd' % (DERIBIT, c.lower())),
         }
     return out
 
 
-# ---------------- 2. Polymarket merdivenleri ----------------
+# ---------------- 2. Polymarket ladders ----------------
 def polymarket_events():
-    return {v: get('%s/events?tag_slug=%s&closed=false&limit=200' % (GAMMA, v),
-                   timeout=60) for v in VARLIKLAR}
+    return {a: get('%s/events?tag_slug=%s&closed=false&limit=200' % (GAMMA, a),
+                   timeout=60) for a in ASSETS}
 
 
 # ---------------- 3. Kalshi ----------------
 def kalshi():
-    """Katalog -> izlenecek seriler -> o serilerin TUM marketleri.
+    """Catalogue -> series to track -> ALL markets of those series.
 
-    status filtresi YOK: cozulmus marketler de gelsin. Cozulme sonucu
-    kalibrasyon/Brier veri setinin ta kendisi ve sonradan geri alinamaz.
+    NO status filter: resolved markets come too. Resolution outcomes are the
+    calibration / Brier data set itself and cannot be recovered afterwards.
 
-    Seri listesi katalogdan turetilir:
-      olculen  = BTC veya ETH etiketli her seri
-      gozlem   = Financials icinde endeks/emtia deseni tutan seriler
-                 (kapsam karari verilene kadar sayi uretilmez)
+    The series list is derived from the catalogue:
+      markets  = every series tagged BTC or ETH
+      observed = series under Financials matching the index/commodity pattern
+                 (no number is produced from these until scope is decided)
     """
-    out = {'katalog': {}, 'marketler': {}, 'gozlem': {}, 'secim': {}}
-    for kat in ('Crypto', 'Financials'):
+    out = {'catalogue': {}, 'markets': {}, 'observed': {}, 'selection': {}}
+    for cat in ('Crypto', 'Financials'):
         try:
-            out['katalog'][kat] = get('%s/series?category=%s' % (KALSHI, kat), timeout=45)
+            out['catalogue'][cat] = get('%s/series?category=%s' % (KALSHI, cat), timeout=45)
         except Exception as e:
-            out['katalog'][kat] = {'_hata': str(e)[:150]}
+            out['catalogue'][cat] = {'_error': str(e)[:150]}
 
-    def seriler(kat, sec):
-        d = out['katalog'].get(kat) or {}
-        return [x.get('ticker') for x in (d.get('series') or []) if x.get('ticker') and sec(x)]
+    def series(cat, pick):
+        d = out['catalogue'].get(cat) or {}
+        return [x.get('ticker') for x in (d.get('series') or []) if x.get('ticker') and pick(x)]
 
-    kripto = seriler('Crypto', lambda x: bool({'BTC', 'ETH'} & set(x.get('tags') or [])))
-    gozlem = seriler('Financials', lambda x: bool(re.search(
-        KALSHI_GOZLEM_DESEN, (x.get('title') or '') + ' ' + ' '.join(x.get('tags') or []), re.I)))
-    kripto = kripto[:KALSHI_SERI_UST_SINIR]
-    gozlem = gozlem[:KALSHI_SERI_UST_SINIR // 3]
-    out['secim'] = {'kripto': kripto, 'gozlem': gozlem}
+    crypto = series('Crypto', lambda x: bool({'BTC', 'ETH'} & set(x.get('tags') or [])))
+    observed = series('Financials', lambda x: bool(re.search(
+        KALSHI_OBSERVED_PATTERN, (x.get('title') or '') + ' ' + ' '.join(x.get('tags') or []), re.I)))
+    crypto = crypto[:KALSHI_SERIES_CAP]
+    observed = observed[:KALSHI_SERIES_CAP // 3]
+    out['selection'] = {'crypto': crypto, 'observed': observed}
 
     def markets(t):
-        sayfa, imlec, hepsi = 0, '', []
-        while sayfa < 5:
+        page, cursor, all_rows = 0, '', []
+        while page < 5:
             u = '%s/markets?series_ticker=%s&limit=200' % (KALSHI, t)
-            if imlec:
-                u += '&cursor=%s' % imlec
+            if cursor:
+                u += '&cursor=%s' % cursor
             d = get(u, timeout=30)
             m = d.get('markets') or []
-            hepsi += m
-            imlec = d.get('cursor') or ''
-            if not imlec or not m:
+            all_rows += m
+            cursor = d.get('cursor') or ''
+            if not cursor or not m:
                 break
-            sayfa += 1
-        return hepsi
+            page += 1
+        return all_rows
 
-    for kova_ad, liste in (('marketler', kripto), ('gozlem', gozlem)):
-        for t in liste:
+    for key, tickers in (('markets', crypto), ('observed', observed)):
+        for t in tickers:
             try:
-                out[kova_ad][t] = markets(t)
+                out[key][t] = markets(t)
             except Exception as e:
-                out[kova_ad][t] = {'_hata': str(e)[:150]}
+                out[key][t] = {'_error': str(e)[:150]}
             time.sleep(0.08)
     return out
 
 
-# ---- ESZAMANLILIK: uc kaynagin da kendi ani ayri kaydediliyor (D-015) ----
-# Kalshi ~20 cagri suruyor; pencereyi buyutuyor. Gizlemek yerine OLCUYORUZ:
-# hangi ikili arasindaki kaymanin ne oldugu sonradan hesaplanabilsin.
-ANLAR = {}
-ANLAR['baslangic'] = 0.0
-asama('deribit', deribit);            ANLAR['deribit_bitis'] = round(time.time()-t0_hepsi, 2)
-asama('polymarket_events', polymarket_events); ANLAR['polymarket_bitis'] = round(time.time()-t0_hepsi, 2)
-PENCERE = ANLAR['polymarket_bitis']             # Deribit <-> Polymarket kaymasi
-asama('kalshi', kalshi);              ANLAR['kalshi_bitis'] = round(time.time()-t0_hepsi, 2)
+# ---- SIMULTANEITY: each source's own instant is recorded separately (D-015) ----
+# Kalshi takes ~20 calls and widens the window. Rather than hide that, we MEASURE
+# it, so the drift between any pair can be computed afterwards.
+MARKS = {}
+MARKS['start'] = 0.0
+stage('deribit', deribit);            MARKS['deribit_end'] = round(time.time()-t0_all, 2)
+stage('polymarket_events', polymarket_events); MARKS['polymarket_end'] = round(time.time()-t0_all, 2)
+WINDOW = MARKS['polymarket_end']                # Deribit <-> Polymarket drift
+stage('kalshi', kalshi);              MARKS['kalshi_end'] = round(time.time()-t0_all, 2)
 
 
-# ---------------- 3. Akis: olay bazli, boslukla birlikte ----------------
-def _yeni_mi(t, wm):
-    """Bu islem su isaretinden sonra mi? Sinir anindaki beraberlikler hash ile ayrilir."""
+# ---------------- 3. Flow: event-based, with gaps ----------------
+def _is_new(t, wm):
+    """Is this trade after the watermark? Ties at the boundary split by hash."""
     ts = int(t.get('timestamp') or 0)
     if ts > wm['ts']:
         return True
     return ts == wm['ts'] and t.get('transactionHash') not in wm['hashes']
 
 
-def akis(cids):
-    yeni, kapsam = [], []
+def flow(cids):
+    new, coverage = [], []
     for cid in cids:
         wm = WM.get(cid) or {'ts': 0, 'hashes': []}
-        ilk_kez = wm['ts'] == 0
-        toplandi, sayfa_no, sayfalama_calisti, gorulen = [], 0, None, set()
+        first_time = wm['ts'] == 0
+        collected, page_no, pagination_worked, seen = [], 0, None, set()
         try:
-            while sayfa_no < MAX_SAYFA:
-                url = '%s/trades?market=%s&limit=%d' % (DATA, cid, SAYFA)
-                if sayfa_no:
-                    url += '&offset=%d' % (sayfa_no * SAYFA)
+            while page_no < MAX_PAGES:
+                url = '%s/trades?market=%s&limit=%d' % (DATA, cid, PAGE)
+                if page_no:
+                    url += '&offset=%d' % (page_no * PAGE)
                 s = get(url, timeout=25)
                 if not isinstance(s, list) or not s:
                     break
                 h = {x.get('transactionHash') for x in s}
-                if sayfa_no:
-                    # Sayfalama gercekten yeni kayit getiriyor mu? OLC, varsayma.
-                    sayfalama_calisti = len(h - gorulen) > 0
-                    if not sayfalama_calisti:
+                if page_no:
+                    # Does pagination actually return new records? MEASURE, do not assume.
+                    pagination_worked = len(h - seen) > 0
+                    if not pagination_worked:
                         break
-                gorulen |= h
-                toplandi += s
-                if len(s) < SAYFA:
+                seen |= h
+                collected += s
+                if len(s) < PAGE:
                     break
-                # Ilk kosuda geriye kazmaya calisma: baslangic noktamiz burasi.
-                if ilk_kez:
+                # On the first run do not dig backwards: this is our starting point.
+                if first_time:
                     break
-                # Su isaretine ulastiysak yeter.
+                # Once we reach the watermark, that is enough.
                 if min(int(x.get('timestamp') or 0) for x in s) <= wm['ts']:
                     break
-                sayfa_no += 1
+                page_no += 1
             time.sleep(0.12)
         except Exception as e:
-            kapsam.append({'market': cid, 'hata': str(e)[:150]})
+            coverage.append({'market': cid, 'error': str(e)[:150]})
             continue
 
-        n = [t for t in toplandi if _yeni_mi(t, wm)]
-        yeni += n
-        ts_hepsi = [int(t.get('timestamp') or 0) for t in toplandi if t.get('timestamp')]
-        en_eski = min(ts_hepsi) if ts_hepsi else None
-        en_yeni = max(ts_hepsi) if ts_hepsi else None
-        limit_doldu = len(toplandi) >= SAYFA
-        # BOSLUK: sinira dayandik AMA onceki su isaretine geri ulasamadik.
-        bosluk = bool(limit_doldu and not ilk_kez and en_eski is not None
-                      and en_eski > wm['ts'])
-        kapsam.append({
-            'market': cid, 'cekim_utc': zaman.isoformat(),
-            'donen': len(toplandi), 'yeni': len(n), 'sayfa': sayfa_no + 1,
-            'en_eski_ts': en_eski, 'en_yeni_ts': en_yeni,
-            'onceki_su_isareti': wm['ts'], 'limit_doldu': limit_doldu,
-            'sayfalama_calisti': sayfalama_calisti,
-            'ilk_kez': ilk_kez,
-            # ilk kosuda "bosluk" kavrami anlamsiz: baslangic noktasi burasi.
-            'BOSLUK': bosluk,
+        n = [t for t in collected if _is_new(t, wm)]
+        new += n
+        all_ts = [int(t.get('timestamp') or 0) for t in collected if t.get('timestamp')]
+        oldest = min(all_ts) if all_ts else None
+        newest = max(all_ts) if all_ts else None
+        limit_hit = len(collected) >= PAGE
+        # GAP: we hit the limit AND could not reach back to the previous watermark.
+        gap = bool(limit_hit and not first_time and oldest is not None
+                   and oldest > wm['ts'])
+        coverage.append({
+            'market': cid, 'fetched_utc': now.isoformat(),
+            'returned': len(collected), 'new': len(n), 'pages': page_no + 1,
+            'oldest_ts': oldest, 'newest_ts': newest,
+            'previous_watermark': wm['ts'], 'limit_hit': limit_hit,
+            'pagination_worked': pagination_worked,
+            'first_time': first_time,
+            # on the first run "gap" is meaningless: this is the starting point.
+            'GAP': gap,
         })
-        if en_yeni is not None:
-            WM[cid] = {'ts': en_yeni,
-                       'hashes': [t.get('transactionHash') for t in toplandi
-                                  if int(t.get('timestamp') or 0) == en_yeni]}
-    return {'yeni_islemler': yeni, 'kapsam': kapsam}
+        if newest is not None:
+            WM[cid] = {'ts': newest,
+                       'hashes': [t.get('transactionHash') for t in collected
+                                  if int(t.get('timestamp') or 0) == newest]}
+    return {'new_trades': new, 'coverage': coverage}
 
 
-# ---------------- Kapsam filtresi: yalnizca FIYAT MERDIVENLERI ----------------
-# v2'nin ilk kosusu 770 market cekti; bunlar 'bitcoin'/'ethereum' etiketli TUM
-# marketler. Ilan ettigimiz kapsam (D-034) ise BTC/ETH fiyat merdivenleri.
-# Bu bir TOPLAMA filtresidir, siniflandirma DEGILDIR: kontrat tipi (terminal/
-# touch/range) hala kural metninden belirlenir. Burada yalnizca "bu market bir
-# fiyat esigi tasiyor mu" sorusu soruluyor.
-ESIK = re.compile(r'\$\s?\d[\d.,]{2,}')
+# ---------------- Scope filter: PRICE LADDERS only ----------------
+# The first v2 run fetched 770 markets; those are ALL markets tagged
+# 'bitcoin'/'ethereum'. The scope we declared (D-034) is BTC/ETH price ladders.
+# This is a COLLECTION filter, NOT a classification: contract type (terminal /
+# touch / range) is still decided from the rule text. The only question here is
+# "does this market carry a price threshold".
+THRESHOLD_RE = re.compile(r'\$\s?\d[\d.,]{2,}')
 
 
-def merdiven_mi(m):
-    metin = '%s %s' % (m.get('question') or '', m.get('groupItemTitle') or '')
-    return bool(ESIK.search(metin))
+def is_ladder(m):
+    text = '%s %s' % (m.get('question') or '', m.get('groupItemTitle') or '')
+    return bool(THRESHOLD_RE.search(text))
 
 
-cids, kapsam_disi = [], 0
-for _v, evs in (kova.get('polymarket_events') or {}).items():
+cids, out_of_scope = [], 0
+for _a, evs in (bucket.get('polymarket_events') or {}).items():
     for e in (evs or []):
         for m in (e.get('markets') or []):
             if not m.get('conditionId'):
                 continue
-            if merdiven_mi(m):
+            if is_ladder(m):
                 cids.append(m['conditionId'])
             else:
-                kapsam_disi += 1
+                out_of_scope += 1
 cids = list(dict.fromkeys(cids))
-asama('akis', lambda: akis(cids))
+stage('flow', lambda: flow(cids))
 
 
-# ---------------- 4. Pozisyon sahipleri: gunde bir kez ----------------
+# ---------------- 4. Holders: once a day ----------------
 def holders():
     out = {}
     for c in cids[:80]:
         try:
             out[c] = get('%s/holders?market=%s&limit=100' % (DATA, c), timeout=25)
         except Exception as e:
-            out[c] = {'_hata': str(e)[:150]}
+            out[c] = {'_error': str(e)[:150]}
         time.sleep(0.12)
     return out
 
 
-holders_gun_yolu = os.path.join(ROOT, 'raw', 'holders', GUN)
-if not os.path.isdir(holders_gun_yolu) or zaman.hour == HOLDERS_SAATI:
-    asama('holders', holders)
+holders_day_path = os.path.join(ROOT, 'raw', 'holders', DAY)
+if not os.path.isdir(holders_day_path) or now.hour == HOLDERS_HOUR:
+    stage('holders', holders)
 else:
-    sureler['holders'] = 'atlandi (gunde bir kez)'
+    durations['holders'] = 'skipped (once a day)'
 
 
-# ---------------- YAZMA ----------------
-yazildi = []
+# ---------------- WRITING ----------------
+written = []
 
 
-def kaydet(ad, veri):
-    p = os.path.join(ROOT, 'raw', ad, GUN, '%s_%s.json.gz' % (ad, DAMGA))
-    yazildi.append({'dosya': os.path.relpath(p, ROOT), 'bayt': yaz_gz(p, veri)})
+def save(name, data):
+    p = os.path.join(ROOT, 'raw', name, DAY, '%s_%s.json.gz' % (name, STAMP))
+    written.append({'file': os.path.relpath(p, ROOT), 'bytes': write_gz(p, data)})
 
 
-if 'deribit' in kova:
-    kaydet('deribit', kova['deribit'])
-if 'polymarket_events' in kova:
-    kaydet('polymarket_events', kova['polymarket_events'])
-if 'holders' in kova:
-    kaydet('holders', kova['holders'])
-if 'kalshi' in kova:
-    kaydet('kalshi', kova['kalshi'])
+if 'deribit' in bucket:
+    save('deribit', bucket['deribit'])
+if 'polymarket_events' in bucket:
+    save('polymarket_events', bucket['polymarket_events'])
+if 'holders' in bucket:
+    save('holders', bucket['holders'])
+if 'kalshi' in bucket:
+    save('kalshi', bucket['kalshi'])
 
-akis_sonuc = kova.get('akis') or {'yeni_islemler': [], 'kapsam': []}
+flow_result = bucket.get('flow') or {'new_trades': [], 'coverage': []}
 
-# Yeni islemler: KOSU BASINA ayri gz dosyasi. Ham alanlar aynen korunur (kural 2).
-# Neden tek dosyaya eklemiyoruz: git dosyalari tam blob olarak saklar. Buyuyen
-# tek bir NDJSON'a gunde uc kez eklemek, her seferinde dosyanin tamamini yeni
-# bir nesne olarak yazdirir. Kosu basina dosya bu buyumeyi ortadan kaldirir.
-# Tekilleme zaten su isaretiyle yapildigi icin ekleme semantigine ihtiyac yok.
-nd = os.path.join(ROOT, 'raw', 'events', 'trades', GUN, 'trades_%s.ndjson.gz' % DAMGA)
+# New trades: a separate gz file PER RUN. Vendor fields are preserved as-is
+# (rule 2). Why not append to one file: git stores files as whole blobs, so
+# appending to a growing NDJSON three times a day re-stores the entire file as a
+# new object each time. A file per run removes that growth. De-duplication is
+# already done by watermark, so append semantics are not needed.
+nd = os.path.join(ROOT, 'raw', 'events', 'trades', DAY, 'trades_%s.ndjson.gz' % STAMP)
 os.makedirs(os.path.dirname(nd), exist_ok=True)
 with gzip.open(nd, 'wt', encoding='utf-8') as f:
-    for t in akis_sonuc['yeni_islemler']:
+    for t in flow_result['new_trades']:
         f.write(json.dumps(t, ensure_ascii=False, separators=(',', ':')) + '\n')
-yazildi.append({'dosya': os.path.relpath(nd, ROOT), 'bayt': os.path.getsize(nd)})
+written.append({'file': os.path.relpath(nd, ROOT), 'bytes': os.path.getsize(nd)})
 
-kp = os.path.join(ROOT, 'raw', 'coverage', GUN, 'coverage_%s.json' % DAMGA)
-os.makedirs(os.path.dirname(kp), exist_ok=True)
-with open(kp, 'w', encoding='utf-8') as f:
-    json.dump(akis_sonuc['kapsam'], f, ensure_ascii=False, indent=1)
-yazildi.append({'dosya': os.path.relpath(kp, ROOT), 'bayt': os.path.getsize(kp)})
+cp = os.path.join(ROOT, 'raw', 'coverage', DAY, 'coverage_%s.json' % STAMP)
+os.makedirs(os.path.dirname(cp), exist_ok=True)
+with open(cp, 'w', encoding='utf-8') as f:
+    json.dump(flow_result['coverage'], f, ensure_ascii=False, indent=1)
+written.append({'file': os.path.relpath(cp, ROOT), 'bytes': os.path.getsize(cp)})
 
-os.makedirs(os.path.dirname(WM_YOL), exist_ok=True)
-with open(WM_YOL, 'w', encoding='utf-8') as f:
+os.makedirs(os.path.dirname(WM_PATH), exist_ok=True)
+with open(WM_PATH, 'w', encoding='utf-8') as f:
     json.dump(WM, f, ensure_ascii=False, separators=(',', ':'))
 
-K = akis_sonuc['kapsam']
-sayfalama = [k.get('sayfalama_calisti') for k in K if k.get('sayfalama_calisti') is not None]
-ozet = {
-    'market': len(K),
-    'kapsam_disi_market': kapsam_disi,   # fiyat esigi tasimadigi icin cekilmedi
-    'yeni_islem': len(akis_sonuc['yeni_islemler']),
-    'limit_dolan': sum(1 for k in K if k.get('limit_doldu')),
-    'BOSLUKLU': sum(1 for k in K if k.get('BOSLUK')),
-    'ilk_kez': sum(1 for k in K if k.get('ilk_kez')),
-    'sayfalama_denendi': len(sayfalama),
-    'sayfalama_calisti': sum(1 for x in sayfalama if x),
+C = flow_result['coverage']
+pagination = [c.get('pagination_worked') for c in C if c.get('pagination_worked') is not None]
+summary = {
+    'markets': len(C),
+    'out_of_scope_markets': out_of_scope,   # no price threshold, so not fetched
+    'new_trades': len(flow_result['new_trades']),
+    'limit_hit': sum(1 for c in C if c.get('limit_hit')),
+    'WITH_GAP': sum(1 for c in C if c.get('GAP')),
+    'first_time': sum(1 for c in C if c.get('first_time')),
+    'pagination_tried': len(pagination),
+    'pagination_worked': sum(1 for x in pagination if x),
 }
-meta = {'snapshot_utc': zaman.isoformat(),
-        'toplam_saniye': round(time.time() - t0_hepsi, 2),
-        'fiyat_penceresi_saniye': PENCERE,      # Deribit <-> Polymarket
-        'kaynak_anlari_saniye': ANLAR,          # ucuncu kaynagin kaymasi da gorunur
-        'asama_sureleri': sureler, 'hatalar': hatalar,
-        'tam_mi': len(hatalar) == 0, 'akis_ozeti': ozet,
-        'kalshi_ozeti': (lambda k: None if not k else {
-            'katalog': {a: len((b or {}).get('series') or []) for a, b in k['katalog'].items()},
-            'izlenen_kripto_seri': len(k['secim']['kripto']),
-            'izlenen_gozlem_seri': len(k['secim']['gozlem']),
-            'market_donen_seri': sum(1 for v in k['marketler'].values() if isinstance(v, list) and v),
-            'toplam_market': sum(len(v) for v in k['marketler'].values() if isinstance(v, list)),
-            'gozlem_market': sum(len(v) for v in k['gozlem'].values() if isinstance(v, list)),
-        })(kova.get('kalshi')),
-        'dosyalar': yazildi, 'varliklar': VARLIKLAR, 'surum': 2}
-mp = os.path.join(ROOT, 'raw', '_meta', GUN, 'meta_%s.json' % DAMGA)
+meta = {'snapshot_utc': now.isoformat(),
+        'total_seconds': round(time.time() - t0_all, 2),
+        'sync_window_seconds': WINDOW,          # Deribit <-> Polymarket
+        'source_marks_seconds': MARKS,          # the third source's drift is visible too
+        'stage_seconds': durations, 'errors': errors,
+        'complete': len(errors) == 0, 'flow_summary': summary,
+        'kalshi_summary': (lambda k: None if not k else {
+            'catalogue': {a: len((b or {}).get('series') or []) for a, b in k['catalogue'].items()},
+            'crypto_series_tracked': len(k['selection']['crypto']),
+            'observed_series_tracked': len(k['selection']['observed']),
+            'series_returning_markets': sum(1 for v in k['markets'].values() if isinstance(v, list) and v),
+            'total_markets': sum(len(v) for v in k['markets'].values() if isinstance(v, list)),
+            'observed_markets': sum(len(v) for v in k['observed'].values() if isinstance(v, list)),
+        })(bucket.get('kalshi')),
+        'files': written, 'assets': ASSETS, 'version': ARCHIVE_VERSION}
+mp = os.path.join(ROOT, 'raw', '_meta', DAY, 'meta_%s.json' % STAMP)
 os.makedirs(os.path.dirname(mp), exist_ok=True)
 with open(mp, 'w', encoding='utf-8') as f:
     json.dump(meta, f, ensure_ascii=False, indent=1)
 
-# ---------------- isaretci (state/latest.json) ----------------
-# Sayfa en yeni anlik goruntuyu bulmak icin GitHub contents API'sini listeliyordu.
-# Kimliksiz sinir saatte 60. Sayac ayrica HER arsiv gunu icin ayri listeleme
-# yaptigindan maliyet gunde bir artiyordu: 12 gunde yukleme basina ~18 cagri,
-# yani ziyaretci basina saatte ~3 sayfa acilisi. Sonra site "archive unavailable"
-# gosteriyordu. Bu dosya o listelemelerin yerine geciyor; sayfa tek bir raw
-# dosyasi okuyor ve API cagrisi sifira iniyor. raw.githubusercontent.com'da
-# boyle bir sinir yok (yalnizca ~5 dakikalik CDN onbellegi; toplayici gunde uc
-# kez kostugu icin -- 05:00/13:00/21:00 UTC, 8 saat arayla -- sorun degil).
-# Karar: D-070.
+# ---------------- pointer (state/latest.json) ----------------
+# The page used to list the GitHub contents API to find the newest snapshot. The
+# unauthenticated limit is 60 per hour. The counter also listed EVERY archive day
+# separately, so the cost grew by one call a day: at 12 days that was ~18 calls
+# per page load, i.e. ~3 page opens per visitor per hour, after which the site
+# showed "archive unavailable". This file replaces those listings; the page reads
+# one raw file and the API cost drops to zero. raw.githubusercontent.com has no
+# such limit (only a ~5 minute CDN cache, which is irrelevant when the collector
+# runs three times a day -- 05:00/13:00/21:00 UTC, eight hours apart).
+# Decision: D-070.
 def _rel(p):
     return os.path.relpath(p, ROOT).replace(os.sep, '/')
 
-yollar = {}
-for y in yazildi:
-    d = y['dosya'].replace(os.sep, '/')
-    for ad in ('kalshi', 'deribit', 'polymarket_events'):
-        if d.startswith('raw/%s/' % ad):
-            yollar[ad] = d
 
-# Arsiv sayaci diskten sayilir. Sayfanin gun basina bir API listelemesi
-# yapmasinin tek sebebi buydu.
-meta_kok = os.path.join(ROOT, 'raw', '_meta')
-gunluk = {}
-if os.path.isdir(meta_kok):
-    for g in sorted(os.listdir(meta_kok)):
-        gp = os.path.join(meta_kok, g)
-        if os.path.isdir(gp):
-            gunluk[g] = len([x for x in os.listdir(gp) if x.endswith('.json')])
+paths = {}
+for w in written:
+    d = w['file'].replace(os.sep, '/')
+    for name in ('kalshi', 'deribit', 'polymarket_events'):
+        if d.startswith('raw/%s/' % name):
+            paths[name] = d
 
-gun_listesi = sorted(gunluk)
-# Anahtarlar surum 2'de ingilizceye gecti (bkz. docs/GLOSSARY.md). Bu dosya
-# her kosuda yeniden yazilan bir ISARETCIDIR, arsiv degil — o yuzden yeniden
-# adlandirmak gecmis veriyi bozmaz. Ham arsiv dosyalarinin (_meta, coverage,
-# kalshi) anahtarlari BILEREK degismedi: onlar bir kez yazilip bir daha
-# degistirilmiyor, yeniden adlandirmak iki uyumsuz dosya kusagi yaratirdi.
-# Sayfa degisim boyunca hem eski hem yeni anahtari kabul ediyor.
-isaretci = {
+# The archive counter is counted from disk. That was the only reason the page
+# made one API listing per day.
+meta_root = os.path.join(ROOT, 'raw', '_meta')
+per_day = {}
+if os.path.isdir(meta_root):
+    for d in sorted(os.listdir(meta_root)):
+        dp = os.path.join(meta_root, d)
+        if os.path.isdir(dp):
+            per_day[d] = len([x for x in os.listdir(dp) if x.endswith('.json')])
+
+day_list = sorted(per_day)
+pointer = {
     'version': 2,
-    'snapshot_utc': zaman.isoformat(),
-    'day': GUN,
-    'stamp': DAMGA,
-    'sync_window_seconds': PENCERE,
-    'complete': len(hatalar) == 0,
-    'paths': yollar,
+    'snapshot_utc': now.isoformat(),
+    'day': DAY,
+    'stamp': STAMP,
+    'sync_window_seconds': WINDOW,
+    'complete': len(errors) == 0,
+    'paths': paths,
     'meta_path': _rel(mp),
     'archive': {
-        'day_count': len(gunluk),
-        'snapshot_count': sum(gunluk.values()),
-        'first_day': gun_listesi[0] if gun_listesi else None,
-        'last_day': gun_listesi[-1] if gun_listesi else None,
-        'per_day': gunluk,
+        'day_count': len(per_day),
+        'snapshot_count': sum(per_day.values()),
+        'first_day': day_list[0] if day_list else None,
+        'last_day': day_list[-1] if day_list else None,
+        'per_day': per_day,
     },
 }
 ip = os.path.join(ROOT, 'state', 'latest.json')
 os.makedirs(os.path.dirname(ip), exist_ok=True)
 with open(ip, 'w', encoding='utf-8') as f:
-    json.dump(isaretci, f, ensure_ascii=False, indent=1)
-yazildi.append({'dosya': _rel(ip), 'bayt': os.path.getsize(ip)})
+    json.dump(pointer, f, ensure_ascii=False, indent=1)
+written.append({'file': _rel(ip), 'bytes': os.path.getsize(ip)})
 
-# Isaretci eksik akis varsa sessizce gecmesin: sayfa o akisi okuyamaz.
-for _ad in ('kalshi', 'deribit'):
-    if _ad not in yollar:
-        hatalar.append('isaretci_eksik_%s' % _ad)
+# A pointer with a missing stream must not pass quietly: the page cannot read it.
+for _name in ('kalshi', 'deribit'):
+    if _name not in paths:
+        errors['pointer_missing_%s' % _name] = 'stream absent from pointer'
 
-# Arsiv penceresi burada DEGIL: budama scripts/prune_archive.py'de ve is
-# akisinda private ayna basariyla guncellendikten SONRA kosuyor. Sirasi
-# onemli — ayna atlanirsa budama da atlanmali, yoksa sessiz veri kaybi olur.
-print('DIVERGENCE v2 — %s' % zaman.isoformat())
-print('  fiyat penceresi : %.2f sn' % PENCERE)
-print('  toplam sure     : %.2f sn' % meta['toplam_saniye'])
-print('  akis: %(market)d merdiven marketi (kapsam disi %(kapsam_disi_market)d) | %(yeni_islem)d YENI islem | limit dolan %(limit_dolan)d'
-      ' | BOSLUKLU %(BOSLUKLU)d | ilk kez %(ilk_kez)d' % ozet)
-print('  sayfalama: %d denendi, %d calisti  <- data-api offset destegi BU SATIRDAN okunur'
-      % (ozet['sayfalama_denendi'], ozet['sayfalama_calisti']))
-for y in yazildi:
-    print('    %-52s %8.1f KB' % (y['dosya'], y['bayt'] / 1024))
-if hatalar:
-    print('  EKSIK ASAMALAR : %s' % ', '.join(hatalar))
+# The archive window is NOT here: pruning lives in scripts/prune_archive.py and
+# runs in the workflow AFTER the private mirror has been updated successfully.
+# The order matters — if the mirror is skipped the pruning must be skipped too,
+# otherwise data is lost silently.
+print('DIVERGENCE v3 — %s' % now.isoformat())
+print('  sync window : %.2f s' % WINDOW)
+print('  total time  : %.2f s' % meta['total_seconds'])
+print('  flow: %(markets)d ladder markets (out of scope %(out_of_scope_markets)d)'
+      ' | %(new_trades)d NEW trades | limit hit %(limit_hit)d'
+      ' | WITH GAP %(WITH_GAP)d | first time %(first_time)d' % summary)
+print('  pagination: %d tried, %d worked  <- data-api offset support is read from THIS line'
+      % (summary['pagination_tried'], summary['pagination_worked']))
+for w in written:
+    print('    %-52s %8.1f KB' % (w['file'], w['bytes'] / 1024))
+if errors:
+    print('  FAILED STAGES : %s' % ', '.join(errors))
 sys.exit(0)
