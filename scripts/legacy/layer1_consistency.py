@@ -9,25 +9,27 @@
 # re-measured against the archive by the measure_*.py scripts one directory up.
 #
 # Do not repair this file. If you need what it did, write a new measurement on
-# top of scripts/arsiv.py.
+# top of scripts/archive.py.
 
 #!/usr/bin/env python3
 """
-layer1_consistency.py — KATMAN 1 IC TUTARLILIK TESTI
+layer1_consistency.py — LAYER 1 INTERNAL CONSISTENCY TEST
 
-Soru: Kova (range) merdiveninden cikardigimiz ayrik yogunlugun kumulatifi,
-AYNI VADEDEKI terminal esik merdiveninin fiyatlarini veriyor mu?
+The question: does the cumulative of the discrete density we extract from a
+bucket (range) ladder reproduce the prices of the terminal threshold ladder at
+THE SAME EXPIRY?
 
-Iki merdiven ayni olayi iki farkli sekilde fiyatliyor:
-  - range   : P(K_i < S_T <= K_{i+1})     -> yogunluk, dogrudan
-  - terminal: P(S_T > K)                  -> kumulatif hayatta kalma fonksiyonu
-Ozdeslik:  P(S_T > K_j) = toplam_{i >= j} P(kova_i)
+Two ladders price the same event in two different ways:
+  - range    : P(K_i < S_T <= K_{i+1})     -> the density, directly
+  - terminal : P(S_T > K)                  -> the cumulative survival function
+The identity:  P(S_T > K_j) = sum over i >= j of P(bucket_i)
 
-Tutuyorsa: merdiven->yogunluk motoru calisiyor, siniflandirmam dogru.
-Tutmuyorsa: ya siniflandirma yanlis, ya piyasada tutarsizlik var, ya veri bayat.
-Ucunu ayirt etmek icin sapmanin BUYUKLUGU ve ISARETI okunur.
+If it holds: the ladder-to-density engine works and the classification is right.
+If it does not: either the classification is wrong, or the market is
+inconsistent, or the data is stale. The SIZE and the SIGN of the deviation are
+what tell the three apart.
 
-Dis veri kaynagi GEREKTIRMEZ. Yalnizca raw/_store.json kullanir.
+Needs NO external data source. It uses raw/_store.json only.
 """
 import json, os, sys, datetime
 
@@ -36,14 +38,15 @@ STORE = os.path.join(BASE, 'raw', '_store.json')
 
 
 def mid(m):
-    """Orta fiyat. Tek tarafli kitapta karsi taraf yoksa outcomePrices'a duser."""
+    """Mid price. On a one-sided book with no counterparty it falls back to
+    outcomePrices."""
     bb, ba = m.get('bestBid'), m.get('bestAsk')
     if isinstance(bb, (int, float)) and isinstance(ba, (int, float)):
-        return (bb + ba) / 2.0, 'bid/ask ortasi'
+        return (bb + ba) / 2.0, 'bid/ask mid'
     try:
-        return float(json.loads(m['outcomePrices'])[0]), 'outcomePrices (tek tarafli kitap)'
+        return float(json.loads(m['outcomePrices'])[0]), 'outcomePrices (one-sided book)'
     except Exception:
-        return None, 'YOK'
+        return None, 'NONE'
 
 
 def num(s):
@@ -81,59 +84,60 @@ def run(asset, above_pat, range_pat, expiry):
     store = json.load(open(STORE, encoding='utf-8'))
     above, rng = collect(store, above_pat, range_pat, expiry)
     if not above or not rng:
-        print('%s: veri yok (above=%d, range=%d)' % (asset, len(above), len(rng)))
+        print('%s: no data (above=%d, range=%d)' % (asset, len(above), len(rng)))
         return None
 
     print('\n' + '=' * 76)
-    print('KATMAN 1 — %s, vade %s' % (asset, expiry))
+    print('LAYER 1 — %s, expiry %s' % (asset, expiry))
     print('=' * 76)
 
     ts = sorted({v[2] for v in above.values()} | {r['upd'] for r in rng})
-    print('Snapshot damgalari: %s  (yayilma bu testin hata payinin bir parcasi)'
-          % ', '.join(ts))
+    print('Snapshot stamps: %s  (the spread between them is part of this test'
+          "'s error budget)" % ', '.join(ts))
 
     tot = sum(r['p'] for r in rng)
-    print('\nKova toplami = %.4f   (arbitrajsizlik: 1.0 olmali; fazlasi makas/yuvarlama)'
-          % tot)
+    print('\nBucket total = %.4f   (no-arbitrage: should be 1.0; the excess is'
+          ' spread and rounding)' % tot)
     covered_lo = min(r['lo'] for r in rng)
     has_low_tail = any(r['lo'] == 0.0 for r in rng)
     if not has_low_tail:
-        print('UYARI: alt kuyruk kovasi (<%g) yok. Merdiven TUKENMIS DEGIL.' % covered_lo)
-        print('       Kumulatif bu seviyenin altinda anlamsizdir.')
+        print('WARNING: there is no lower-tail bucket (<%g). The ladder is NOT'
+              ' EXHAUSTIVE.' % covered_lo)
+        print('         The cumulative is meaningless below that level.')
 
-    # Kumulatif: P(S_T > K) = K ve ustundeki kovalarin toplami
+    # Cumulative: P(S_T > K) = the sum of the buckets at and above K
     print('\n%-9s %-12s %-12s %-10s %-10s %s' %
-          ('ESIK', 'KOVA->KUM.', 'TERMINAL', 'FARK', 'NORM.FARK', 'YORUM'))
+          ('THRESHOLD', 'BUCKET->CUM', 'TERMINAL', 'DIFF', 'NORM.DIFF', 'NOTE'))
     print('-' * 76)
     rows = []
     for K in sorted(above.keys(), reverse=True):
         cum = sum(r['p'] for r in rng if r['lo'] >= K - 1e-9)
         term, src, _ = above[K]
         d = cum - term
-        dn = (cum / tot) - term          # kova seti 1'e normalize edilirse
+        dn = (cum / tot) - term          # if the bucket set is normalised to 1
         flag = ''
         if abs(d) > 0.05:
-            flag = 'BUYUK SAPMA'
+            flag = 'LARGE DEVIATION'
         elif abs(d) > 0.02:
-            flag = 'dikkat'
+            flag = 'watch'
         if not has_low_tail and K <= covered_lo:
-            flag = (flag + ' | alt kuyruk eksik').strip(' |')
+            flag = (flag + ' | lower tail missing').strip(' |')
         print('%-9g %-12.4f %-12.4f %-+10.4f %-+10.4f %s' % (K, cum, term, d, dn, flag))
-        rows.append({'strike': K, 'kova_kumulatif': round(cum, 6),
-                     'terminal': round(term, 6), 'fark': round(d, 6),
-                     'normalize_fark': round(dn, 6), 'terminal_kaynak': src})
+        rows.append({'strike': K, 'bucket_cumulative': round(cum, 6),
+                     'terminal': round(term, 6), 'diff': round(d, 6),
+                     'normalised_diff': round(dn, 6), 'terminal_source': src})
 
-    va = [abs(r['fark']) for r in rows]
-    vn = [abs(r['normalize_fark']) for r in rows]
+    va = [abs(r['diff']) for r in rows]
+    vn = [abs(r['normalised_diff']) for r in rows]
     print('-' * 76)
-    print('Ortalama |fark| = %.4f   |  normalize sonrasi = %.4f' %
+    print('Mean |diff| = %.4f   |  after normalising = %.4f' %
           (sum(va) / len(va), sum(vn) / len(vn)))
-    print('En buyuk |fark| = %.4f  |  normalize sonrasi = %.4f' % (max(va), max(vn)))
-    return {'asset': asset, 'expiry': expiry, 'kova_toplami': round(tot, 6),
-            'alt_kuyruk_var': has_low_tail, 'snapshot_damgalari': ts,
-            'ortalama_mutlak_fark': round(sum(va) / len(va), 6),
-            'normalize_ortalama_mutlak_fark': round(sum(vn) / len(vn), 6),
-            'satirlar': rows}
+    print('Max  |diff| = %.4f   |  after normalising = %.4f' % (max(va), max(vn)))
+    return {'asset': asset, 'expiry': expiry, 'bucket_total': round(tot, 6),
+            'has_lower_tail': has_low_tail, 'snapshot_stamps': ts,
+            'mean_absolute_diff': round(sum(va) / len(va), 6),
+            'normalised_mean_absolute_diff': round(sum(vn) / len(vn), 6),
+            'rows': rows}
 
 
 if __name__ == '__main__':
@@ -144,16 +148,18 @@ if __name__ == '__main__':
         if r:
             out.append(r)
     p = os.path.join(BASE, 'inventory', 'layer1_results.json')
-    json.dump({'uretim_zamani_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
-               'sonuclar': out}, open(p, 'w', encoding='utf-8'),
+    json.dump({'produced_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+               'results': out}, open(p, 'w', encoding='utf-8'),
               ensure_ascii=False, indent=1)
-    print('\nYazildi: %s' % p)
+    print('\nWritten: %s' % p)
     print("""
-NASIL OKUNUR
-  fark ~ 0            -> motor calisiyor, siniflandirma dogru.
-  fark hep POZITIF    -> kova seti 1'in ustunde toplaniyor; makas/yuvarlama.
-                         "normalize fark" sutunu bunu duzeltir.
-  tek bir esikte buyuk sapma -> once o kontratin kural metnini oku,
-                         siniflandirma hatasi ihtimali piyasa tutarsizligindan yuksek.
-  alt kuyruk eksikse  -> o seviyenin altindaki kumulatif ANLAMSIZDIR, okuma.
+HOW TO READ THIS
+  diff ~ 0                 -> the engine works and the classification is right.
+  diff always POSITIVE     -> the bucket set sums above 1; spread and rounding.
+                              The "normalised diff" column corrects for that.
+  a large deviation on one -> read that contract's rule text first. A
+  single threshold            classification error is likelier than a market
+                              inconsistency.
+  lower tail missing       -> the cumulative below that level is MEANINGLESS.
+                              Do not read it.
 """)
