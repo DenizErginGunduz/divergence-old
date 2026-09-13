@@ -1,70 +1,78 @@
-# BACKLOG — uygulanmayan, kaydedilen fikirler
+# BACKLOG — ideas recorded, not built
 
-Kapsam genişletme kuralı gereği bunlar uygulanmadı, buraya yazıldı.
+The scope rule says a new idea does not get built, it gets written down here.
 
-## B-001 — Varlık evrenini hisse senetlerine genişletmek
-Gerekçe: ücretsiz opsiyon verisinin en bol olduğu yer ABD hisseleri; emtia en zor yer.
-Polymarket'te hazır merdivenler var (hepsi aylık, hepsi touch, Pyth/normal seans):
-TSLA 14, NVDA 14, META 14, SPY 14, AAPL 10, MSFT 7, AMZN 7, GOOGL 6 basamak.
-Uyarı: MSFT/AMZN/GOOGL hacimleri çok ince (827 / 1.185 / 2.740 USD toplam).
-Bu hacimlerde makas, ölçülen farktan büyük olabilir.
+## B-001 — Extending the asset universe to equities
+Reason: US equities are where free option data is most plentiful; commodities are
+the hardest place. Polymarket already lists ladders (all monthly, all touch,
+Pyth / regular session): TSLA 14, NVDA 14, META 14, SPY 14, AAPL 10, MSFT 7,
+AMZN 7, GOOGL 6 rungs.
+Warning: MSFT / AMZN / GOOGL volumes are very thin (827 / 1,185 / 2,740 USD in
+total). At those volumes the spread can be larger than the gap being measured.
 
-## B-002 — Emtia için ETF vekilleri (GLD / SLV / USO)
-CME opsiyon verisi lisanslı. ETF opsiyonları ücretsiz kanaldan gelir.
-Bedeli: taşıma maliyeti farkı, gider oranı, ve USO'da rulo aşınması.
-**USO uzun vadeli WTI vekili DEĞİLDİR** — contango'da sistematik sapar.
+## B-002 — ETF proxies for commodities (GLD / SLV / USO)
+CME option data is licensed. ETF options come through a free channel.
+The cost: carry differences, expense ratio, and roll decay in USO.
+**USO is NOT a long-dated WTI proxy** — in contango it drifts systematically.
 
-## B-003 — Geçmiş biriktirme boru hattı
-D-009'daki referans metriği için gerekli. Günlük/haftalık marketler doğup ölüyor;
-sonradan geri dönüp çekilemiyor. Her snapshot saklanmalı. Ücretsiz, ama tasarım ister.
-**TAMAMLANDI 2026-08-30** — bkz. D-034, D-040. Toplayıcı GitHub Actions'ta çalışıyor.
+## B-003 — Historical accumulation pipeline
+Needed for the reference metric in D-009. Daily and weekly markets are born and
+die; they cannot be fetched retroactively. Every snapshot has to be kept. Free,
+but it needs design.
+**DONE 2026-08-30** — see D-034, D-040. The collector runs in GitHub Actions.
 
-## B-004 — Kalshi envanteri (ikinci platform)
-Amaç: SPX/NDX boşluğu ve aynı vadede touch+terminal çifti bulmak.
-Kapsamı bilinmiyor, API anahtar isteyebilir.
+## B-004 — Kalshi inventory (second venue)
+Purpose: fill the SPX/NDX gap and find a touch + terminal pair at the same expiry.
+Coverage unknown, the API may require a key.
 
-## B-005 — Touch primi için model katmanı
-Yansıma ilkesi ve varyantları. Katman 3'ü açar ama model riski getirir.
-Katman 4 çalışmadan başlanmamalı.
-**Kısmen ele alındı D-031** — "2" sabiti lognormal tam formülle değiştirildi.
+## B-005 — A model layer for the touch premium
+The reflection principle and its variants. It opens layer 3 but brings model risk.
+Should not be started before layer 4 works.
+**Partly addressed in D-031** — the constant "2" was replaced with the full
+lognormal formula.
 
-## B-006 — Alış-satış makası eşiği
-Hangi makasın üstünde "gösterme" denecek? Ölçülen fark makastan küçükse sayı yanıltır.
+## B-006 — A bid-ask spread threshold
+Above which spread do we say "do not show this"? If the measured gap is smaller
+than the spread, the number misleads.
+**Decided in D-021** — spread ≤ 0.02 and mid < 0.99. Also D-033: the tick floor.
 
-## B-007, B-008, B-009 — konuşmada geçti, buraya yazılmadı
-Gerçek zamanlı cüzdan izleyici + bildirim, Polymarket `clob/prices-history`
-parametreleri ve COT verisi sohbette bu numaralarla anıldı ama madde olarak
-girilmemiş. Numaralar çakışmasın diye boş bırakıldı; yazan kişi doldursun.
+## B-007 — Live watcher and alerts (2026-08-30)
+Alerts on large trades and on concentrated position moves. It will be a separate
+process, writing to the SAME event format as the archive (D-039, D-040). Actions
+cron cannot run more often than every 5 minutes and can be late, so real live
+watching needs a continuously running process. Measured: the busiest market sees
+156 trades an hour and the rest are far slower — there is no hurry.
 
-## B-010 — Bulgu şeridinden çıkarılan iki kart
-Şerit slider'ken altı bulgu taşıyordu. Sonsuza kayan şerit okunurluğu düşürdüğü
-için grid'e çevrildi ve dört karta indirildi (D-069). Çıkarılan ikisi:
+## B-008 — Polymarket price history via clob/prices-history
+The first attempt returned 200 but empty (`{"history": []}`). The parameters need
+another try. If it works we get a historical series without waiting months for
+accumulation, which pulls the time-series chart and the "typical gap" reference
+far forward.
 
-**Sync window** (`id:'sync'`, canlı)
+## B-009 — COT data
+Mentioned in conversation, never written up as an item. Left as a placeholder so
+the numbering does not collide; whoever picks it up should fill it in.
+
+## B-010 — The two cards removed from the findings strip
+While the strip was a slider it carried six findings. An infinitely scrolling
+strip read worse, so it became a grid and dropped to four cards (D-069). The two
+that were removed:
+
+**Sync window** (`id:'sync'`, live)
 > Time between reading the option chain and the prediction market.
 > An 8-minute gap once moved a result by 33%.
 
-Kart olarak çıkarıldı çünkü değer künye şeridinde `SYNC 0.81s` olarak zaten
-görünüyor; ekranda ikinci kez yer kaplıyordu. Ölçüm kaybolmadı, kart kayboldu.
+Removed as a card because the value is already visible in the dateline as
+`SYNC 0.81s`; it took up space on screen a second time. The measurement was not
+lost, the card was.
 
-**Markets tracked** (`id:'mkts'`, canlı, `S.KA.markets` toplamı)
+**Markets tracked** (`id:'mkts'`, live, the total of `S.KA.markets`)
 > Across three venues, captured in one synchronised run and archived unchanged.
 
-Çıkarıldı çünkü bu bir kapsam sayısı, bulgu değil. "Ne kadar çok izliyoruz"
-diyor, "ne ölçtük" demiyor. Kalan dört kart bir anlatı kuruyor: ne bulduk →
-maliyeti aşıyor mu → sağlam mı → yanılmadığımızı nereden biliyoruz.
+Removed because it is a scope count, not a finding. It says "look how much we
+track", not "here is what we measured". The four remaining cards tell a story:
+what we found → does it beat the cost → is it stable → how do we know we are not
+fooling ourselves.
 
-Şerit ileride tek kartlık otomatik dönen slider'a çevrilirse ikisi de geri
-eklenir; `serit()` içindeki canlı dal kodları da o zaman geri gelmeli.
-**Karar verildi D-021** — makas ≤ 0,02 ve mid < 0,99. Ayrıca D-033: tick tabanı.
-
-## B-007 — Anlık izleyici ve bildirim (2026-08-30)
-Büyük işlem ve yoğunlaşmış pozisyon hareketlerinde bildirim. Ayrı bir süreç olacak;
-arşivle AYNI olay formatına yazacak (D-039, D-040). Actions cron 5 dakikadan sık
-olamaz ve gecikebilir, o yüzden gerçek anlık izleme için sürekli çalışan bir süreç
-gerekir. Ölçüm: en yoğun market 156 işlem/saat, geri kalanı çok yavaş — acele yok.
-
-## B-008 — clob/prices-history ile Polymarket fiyat geçmişi
-İlk denemede 200 döndü ama boş (`{"history": []}`). Parametreler yeniden denenmeli.
-Çalışırsa aylarca birikim beklemeden geçmiş seri elde ederiz; bu, zaman serisi
-grafiğini ve "tipik fark" referansını çok öne çeker.
+If the strip ever becomes a single-card auto-rotating slider, both come back; the
+live branch code inside `strip()` has to come back with them.
