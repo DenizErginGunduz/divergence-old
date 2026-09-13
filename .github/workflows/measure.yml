@@ -1,16 +1,16 @@
 name: measure
 
-# Olcumleri REPO kosturur, insan degil.
+# The REPOSITORY runs the measurements, not a person.
 #
-# Neden: ekrandaki "0/44" ve "%13" gibi kayitli sayilarin repoda yeniden
-# uretilebilir bir yolu yoktu — eski betikler artik var olmayan bir dosya
-# duzenini (raw/_store.json, inventory/*.csv) okuyordu. Denetimde yakalandi.
+# Why: the recorded numbers on screen — "0/44", "13%" — had no reproducible path
+# in the repository. The old scripts read a file layout that no longer existed
+# (raw/_store.json, inventory/*.csv). Caught during an audit.
 #
-# Bundan sonra her olcum ham arsivden hesaplanir ve ciktisi loga yazilir.
-# Ham veri degismedigi icin (kural 2) ayni anlik goruntu her zaman ayni
-# sayiyi verir; yani sonuc tekrarlanabilir ve kontrol edilebilir.
+# From here on every measurement is computed from the raw archive and its output
+# goes into the log. Because raw data is never modified (rule 2), the same
+# snapshot always yields the same number; the result is repeatable and checkable.
 #
-# Ag erisimi YOK: yalnizca depodaki dosyalar okunur.
+# NO network access: only files already in the repository are read.
 
 on:
   workflow_dispatch:
@@ -20,7 +20,7 @@ on:
       - '.github/workflows/measure.yml'
 
 permissions:
-  contents: write        # findings/latest.json commit edilecek
+  contents: write        # findings/latest.json gets committed
 
 jobs:
   measure:
@@ -33,45 +33,45 @@ jobs:
         with:
           python-version: '3.12'
 
-      # Once arsiv okuma yolunun calistigini kanitla. Bu adim kirmiziysa
-      # sonraki her olcum anlamsizdir.
-      - name: Arsiv okuma duman testi
-        run: python scripts/arsiv.py
+      # First prove the archive read path works. If this step is red, every
+      # measurement after it is meaningless.
+      - name: Archive read smoke test
+        run: python scripts/archive.py
 
-      # Surtunme bandi: fark, islem maliyetini asiyor mu? Butun arsiv taranir,
-      # cunku tek anlik goruntuden anlamlilik iddia edilemez.
-      - name: Surtunme bandi olcumu
+      # Friction band: does the gap beat the cost of trading it? The whole
+      # archive is scanned, because no single snapshot can carry significance.
+      - name: Friction band
         run: python scripts/measure_band.py
 
-      # Tuketicilik: kova toplami 1 olmak zorunda. Uc sinir kurali karsilastirilir;
-      # hatalari sayilar degil kisitlar yakaladi (D-067).
-      - name: Tuketicilik kisiti olcumu
+      # Exhaustiveness: bucket probabilities must sum to 1. Three boundary rules
+      # are compared; constraints caught the bug, not numbers (D-067).
+      - name: Exhaustiveness constraint
         run: python scripts/measure_exhaustive.py
 
-      # Ucuncu bagimsiz kurulum: Polymarket gunluk terminal merdivenleri.
-      # touch ("hit") merdivenleri acikca elenir; vade boslugu raporlanir.
-      - name: Polymarket terminal merdivenleri
+      # Third independent setup: Polymarket daily terminal ladders. Touch
+      # ("hit") ladders are excluded explicitly; the expiry gap is reported.
+      - name: Polymarket terminal ladders
         run: python scripts/measure_polymarket.py
 
-      # Ucuncu kurulum ve tek MODEL VARSAYAN olcum. En degerli ciktisi
-      # aritmetik ihlaller: touch olasiligi terminalden kucuk olamaz.
-      - name: Uzun ufuk touch siniri
+      # Third setup, and the only MODEL-ASSUMING measurement. Its most valuable
+      # output is the arithmetic violations: touch cannot be rarer than terminal.
+      - name: Long-horizon touch bound
         run: python scripts/measure_touch.py
 
-      # Sonuclari dosyaya yaz. Log okunmuyor (API yonetici yetkisi istiyor,
-      # arayuz sanallastirilmis); dosya hem okunur hem kalici hem de ekran
-      # bunu okuyacak. Kayit ile ekran boylece ayrilamaz hale geliyor.
-      - name: Bulgulari yaz
+      # Write the results to a file. Logs are not readable (the API needs admin
+      # rights, the UI view is virtualised); a file is readable, durable, and the
+      # page will read it. Record and screen become inseparable that way.
+      - name: Write findings
         run: python scripts/write_findings.py
 
-      - name: findings/ degistiyse commit et
+      - name: Commit findings/ if it changed
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add findings/
           if git diff --staged --quiet; then
-            echo "findings/ degismedi, commit yok"
+            echo "findings/ unchanged, nothing to commit"
           else
-            git commit -m "findings: olcum sonuclari guncellendi (otomatik)"
+            git commit -m "findings: measurement results updated (automated)"
             git push
           fi
