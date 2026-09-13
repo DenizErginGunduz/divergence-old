@@ -47,7 +47,7 @@ için grid'e çevrildi ve dört karta indirildi (D-069). Çıkarılan ikisi:
 Kart olarak çıkarıldı çünkü değer künye şeridinde `SYNC 0.81s` olarak zaten
 görünüyor; ekranda ikinci kez yer kaplıyordu. Ölçüm kaybolmadı, kart kayboldu.
 
-**Markets tracked** (`id:'mkts'`, canlı, `S.KA.marketler` toplamı)
+**Markets tracked** (`id:'mkts'`, canlı, `S.KA.markets` toplamı)
 > Across three venues, captured in one synchronised run and archived unchanged.
 
 Çıkarıldı çünkü bu bir kapsam sayısı, bulgu değil. "Ne kadar çok izliyoruz"
