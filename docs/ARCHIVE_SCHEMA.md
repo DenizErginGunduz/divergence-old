@@ -38,13 +38,12 @@ small and meant to be read by eye. Trades are NDJSON — one JSON object per lin
 because they are appended per run and line-oriented data survives partial reads.
 
 Field names inside our own files (the `kalshi` wrapper, `coverage`, `_meta`,
-`findings`) are ours and are in English. Vendor payloads keep the field names the venue
-returned, because those are not ours to relabel.
+`findings`) are ours. Vendor payloads keep the field names the venue returned, because
+those are not ours to relabel — which is why a Kalshi market object and a Deribit quote
+look exactly as they arrived.
 
-Snapshots written before archive version 3 carry our fields under their earlier Turkish
-names. `scripts/migrate_archive_keys.py` rewrites them permanently; `scripts/archive.py`
-and `web/index.html` also upgrade them at read time, so nothing downstream ever sees an
-old name. The mapping is in `docs/GLOSSARY.md`.
+The schema our own files use is versioned: `_meta` carries a `version` field and
+`state/latest.json` carries its own. Read it before assuming a field is there.
 
 ---
 
