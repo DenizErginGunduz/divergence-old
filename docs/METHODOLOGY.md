@@ -132,7 +132,7 @@ Katman 1, 2 ve 4 burada. Model içermeyen tek karşılaştırma. Önce BTC/ETH.
 Bunlardan biri eksikken gösterilen fark yorumlanamaz. Özellikle makas: ince
 merdivenlerde makas, ölçtüğümüz farkın kendisinden büyük olabilir.
 
-Toplayıcı her koşuda `fiyat_penceresi_saniye` yazar — iki fiyat tarafı arasındaki
+Toplayıcı her koşuda `sync_window_seconds` yazar — iki fiyat tarafı arasındaki
 kayma. Ölçülen değer 0,75–1,97 sn aralığında; D-015'teki 8 dakikalık kayma farkı
 %33 oynatıyordu.
 
