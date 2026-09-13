@@ -146,9 +146,9 @@ Known gaps, tracked openly:
 
 - The decision log is being folded into architecture decision records. Numbers that
   carried no reasoning of their own have been removed rather than renumbered.
-- The archive grows about 4 MB a day. Git is the wrong home for it beyond roughly
-  a year.
+- The archive grows about 4 MB a day and nothing prunes it yet. The rolling window
+  is decided but not built, so git is the wrong home for it beyond roughly a year
+  (docs/DATA_SOURCES.md).
 - 148 of 446 flow markets hit the fetch limit in the latest run with no gap flagged.
   Probably fine, not verified.
 - Assets beyond BTC and ETH are collected but not measured.
-- Documentation is being moved from Turkish to English; some files are still Turkish.
