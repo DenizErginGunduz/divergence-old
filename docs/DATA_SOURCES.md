@@ -1,174 +1,181 @@
-# DATA_SOURCES.md — veri erişilebilirliği
+# DATA_SOURCES.md — what data we can actually get
 
-Kısıt: **ücretsiz**, lisans alınmayacak. Güncelleme: 2026-08-30.
+The constraint: **free**, no licence will be bought. Updated 2026-09-13.
 
-## Kanıt seviyesi — bunu önce oku
+## Evidence level — read this first
 
-| Seviye | Anlamı |
+| Level | Meaning |
 |---|---|
-| `CANLI-DOĞRULANDI` | Gerçek çağrı yapıldı, veri döndü. |
-| `DOKÜMAN` | Sağlayıcının dokümanı okundu, çağrı yapılamadı. |
-| `ERİŞİLEMEDİ` | Çağrı denendi, o ortamdan ulaşılamadı. Kaynak hakkında hüküm değil. |
-| `YASAK` | Sağlayıcı otomatik çekimi açıkça yasaklıyor. |
+| `LIVE-VERIFIED` | A real call was made and data came back. |
+| `DOCUMENTED` | The provider's documentation was read; no call could be made. |
+| `UNREACHABLE` | A call was attempted and failed from that environment. Not a judgement about the source. |
+| `FORBIDDEN` | The provider explicitly forbids automated collection. |
 
-Bu ayrım önemli: bir kaynağa ulaşamamak, o kaynağın kapalı olduğu anlamına gelmez.
-Geliştirme kum havuzumuzun ağı beyaz listeli olduğu için birçok uç oradan
-erişilemedi; aynı uçlar GitHub Actions koşucusundan ve Colab'dan sorunsuz çalıştı.
+The distinction matters: failing to reach a source does not mean the source is
+closed. Our development sandbox has an allowlisted network, so several endpoints
+were unreachable from there; the same endpoints worked without trouble from the
+GitHub Actions runner and from Colab.
 
 ---
 
-## 1. BTC / ETH — Deribit · `CANLI-DOĞRULANDI`
+## 1. BTC / ETH — Deribit · `LIVE-VERIFIED`
 
-| Ne | Durum |
+| What | Status |
 |---|---|
-| Opsiyon zinciri — **call ve put** (strike, mark, bid/ask, IV, OI, hacim) | anahtarsız |
-| Index (spot referans) | anahtarsız |
-| Vadeli + perpetual | anahtarsız |
+| Option chain — **calls and puts** (strike, mark, bid/ask, IV, OI, volume) | no key |
+| Index (spot reference) | no key |
+| Futures and perpetual | no key |
 
-Uç noktalar: `https://www.deribit.com/api/v2/public`
-- `get_book_summary_by_currency?currency=BTC&kind=option` — tüm zincir tek çağrıda
+Endpoints: `https://www.deribit.com/api/v2/public`
+- `get_book_summary_by_currency?currency=BTC&kind=option` — the whole chain in one call
 - `get_index_price?index_name=btc_usd`
 
-**Put zinciri kritik (D-032, D-035).** İlk çekimimiz yalnızca call içeriyordu ve
-aşağı yön olasılığı derin ITM call'dan türetiliyordu — sonuçlar 2,09 kata kadar
-saptı. Toplayıcı artık `kind=option` ile ikisini de çekiyor.
+**The put chain is critical (D-032, D-035).** Our first pull contained calls only
+and derived the downside probability from deep ITM calls — results were off by up
+to a factor of 2.09. The collector now fetches both with `kind=option`.
 
-**Vadeli veriye gerek kalmadı (D-036).** Put-call paritesi `F = K + C − P`
-forward'ı zincirin kendi içinden veriyor. 25SEP26 zincirinde 21 strike boyunca
-dağılım 113,75 USD (%0,146) — zincir iç tutarlı. Bir veri bağımlılığı düştü.
+**Futures data turned out to be unnecessary (D-036).** Put-call parity,
+`F = K + C − P`, gives the forward from the chain itself. Across 21 strikes on the
+25SEP26 chain the dispersion was 113.75 USD (0.146%) — the chain is internally
+consistent. One data dependency dropped.
 
-**Deribit opsiyonları ters (inverse) tiptir:** USD fiyat = BTC prim × index.
+**Deribit options are inverse:** USD price = BTC premium × index.
 
-**Geri dönüş yok:** `get_book_summary` yalnızca anlık durumu verir. Kaçırılan
-günün zinciri kalıcı olarak kaybolur. Arşivin gerekçesi budur (D-037).
+**There is no going back:** `get_book_summary` returns the current state only. A
+missed day's chain is lost permanently. That is the reason the archive exists
+(D-037).
 
 ---
 
-## 2. Polymarket · `CANLI-DOĞRULANDI`
+## 2. Polymarket · `LIVE-VERIFIED`
 
-| Uç | Durum | Ne veriyor |
+| Endpoint | Status | What it gives |
 |---|---|---|
-| `gamma-api` `/events?tag_slug=...` | 200 | merdivenler, kural metni, bestBid/bestAsk |
+| `gamma-api` `/events?tag_slug=...` | 200 | ladders, rule text, bestBid/bestAsk |
 | `data-api` `/trades?market=<conditionId>` | 200 | `proxyWallet, size, price, side, outcome, timestamp, transactionHash` |
-| `data-api` `/holders?market=<conditionId>` | 200 | pozisyon sahipleri |
-| `clob` `/prices-history` | 200 ama **boş** | parametreler yeniden denenmeli (B-008) |
-| `clob` `/book` | 404 | yol yanlış; gerekli değil |
-| `clob` `/trades` | 401 | kimlik ister; `data-api` karşılıyor |
+| `data-api` `/holders?market=<conditionId>` | 200 | position holders |
+| `clob` `/prices-history` | 200 but **empty** | parameters need another try (B-008) |
+| `clob` `/book` | 404 | wrong path; not needed |
+| `clob` `/trades` | 401 | wants credentials; `data-api` covers it |
 
-**Akış verisi ürünün ikinci ayağı (D-038, D-039).** Opsiyon piyasasında karşı
-tarafta kimin olduğunu göremezsin; prediction market zincir üstü olduğu için
-görebilirsin. Bu, prediction market'lerin yapısal üstünlüğü.
+**Flow data is the product's second leg (D-038, D-039).** In an options market you
+cannot see who is on the other side; on a prediction market you can, because it is
+on-chain. That is the structural advantage prediction markets have.
 
-**Ölçülen işlem hızı (2026-08-30, 106 market):**
+**Measured trade rate (2026-08-30, 106 markets):**
 
-| | en hızlı | p10 | medyan | p90 |
+| | fastest | p10 | median | p90 |
 |---|---|---|---|---|
-| 100 işlemin kapsadığı süre | 0,64 sa | 34 sa | **248 sa** | 3.040 sa |
+| time span covered by 100 trades | 0.64 h | 34 h | **248 h** | 3,040 h |
 
-Marketlerin yarısı 24 saattir sessiz; en yoğunu saatte 156 işlem yapıyor.
-`limit=100` ile hiçbir işlemi kaçırmamak için çekim aralığı en yoğun marketin
-100-işlem penceresinden (38 dk) kısa olmalı. Günde üç koşu medyan markette
-hiçbir şey kaybettirmiyor, en yoğununda kaybettirebilir — bu yüzden toplayıcı
-boşluğu tespit edip bayrak koyuyor.
+Half the markets have been silent for 24 hours; the busiest does 156 trades an
+hour. With `limit=100`, to miss nothing the fetch interval has to be shorter than
+the busiest market's 100-trade window (38 minutes). Three runs a day lose nothing
+on the median market and can lose something on the busiest — which is why the
+collector detects a gap and flags it rather than assuming there is none.
 
-**`offset` sayfalama desteği doğrulanmadı (D-042).** Betik varsaymıyor: deniyor
-ve sonucu `pagination_worked` alanına yazıyor. Boşluk oluşmadığı için henüz
-tetiklenmedi.
+**`offset` pagination support is unverified (D-042).** The script does not assume:
+it tries, and writes the outcome into `pagination_worked`. No gap has occurred, so
+it has never been triggered.
 
-**Not — coğrafi engel:** Polymarket Türkiye'den erişime kapalı. Bu boru hattını
-etkilemiyor; toplayıcı GitHub Actions üzerinde (ABD) çalışıyor ve tüm uçlara
-erişiyor. Actions mimarisinin ikinci faydası.
+**Note — geographic block:** Polymarket is not accessible from Turkey. This does
+not affect the pipeline; the collector runs on GitHub Actions in the US and
+reaches every endpoint. That is the second benefit of the Actions architecture.
 
 ---
 
-## 3. Emtia (altın, gümüş, petrol)
+## 3. Commodities (gold, silver, oil)
 
-**Fiyat ile opsiyon zincirini ayırmak şart.** İkisi çok farklı zorlukta.
+**Price and option chain have to be treated separately.** They are nowhere near
+equally hard.
 
-### 3a. Vadeli/spot FİYAT — kolay
-API Ninjas Commodity, CommodityPriceAPI, OilPriceAPI — hepsi `DOKÜMAN`.
-15 dakika gecikme bizim için sorun değil.
+### 3a. Futures / spot PRICE — easy
+API Ninjas Commodity, CommodityPriceAPI, OilPriceAPI — all `DOCUMENTED`.
+A 15-minute delay is not a problem for us.
 
-### 3b. Opsiyon ZİNCİRİ — asıl darboğaz
-CME opsiyon verisi lisanslı. Ücretsiz emtia API'lerinin hiçbiri zincir vermiyor.
+### 3b. Option CHAIN — the real bottleneck
+CME option data is licensed. None of the free commodity APIs provide a chain.
 
-**Çıkış yolu: ETF vekilleri (GLD, SLV, USO).** Bedeli sessizce geçilmemeli:
-- **Taşıma maliyeti farkı** — GLD fiziki altın tutar, GC vadelisi taşıma içerir.
-- **USO'da rulo aşınması** — ön ay CL tutup rulo yapar; contango'da uzun vadede
-  spot petrolden sistematik sapar. **USO uzun vadeli WTI vekili DEĞİLDİR.**
-- **Gider oranı** — fon ücreti yavaş bir kayma yaratır.
+**The way out: ETF proxies (GLD, SLV, USO).** The cost should not be waved
+through:
+- **Carry difference** — GLD holds physical gold; the GC future includes carry.
+- **Roll decay in USO** — it holds front-month CL and rolls; in contango it drifts
+  systematically away from spot oil over long horizons. **USO is NOT a long-dated
+  WTI proxy.**
+- **Expense ratio** — the fund fee creates a slow drift.
 
-### 3c. Polymarket tarafındaki uyumsuzluk
-Altın merdivenimiz `Gold (GC)` CME vadelisi üzerinden çözülüyor. GLD opsiyonuyla
-karşılaştırmak iki dönüşümü üst üste bindirir: GC→GLD ve touch→terminal.
-Her dönüşüm bir hata kaynağı.
+### 3c. The mismatch on the Polymarket side
+Our gold ladder settles on the `Gold (GC)` CME future. Comparing it with a GLD
+option stacks two conversions on top of each other: GC→GLD and touch→terminal.
+Each conversion is a source of error.
 
 ---
 
 ## 4. S&P 500
 
-| Ne | Durum |
+| What | Status |
 |---|---|
-| SPY opsiyon zinciri | `DOKÜMAN` — hisse opsiyonu kanalından ücretsiz |
-| CBOE gecikmeli kotasyon sayfaları | **`YASAK`** |
-| ES vadelisi | `UNKNOWN` |
+| SPY option chain | `DOCUMENTED` — free through the equity-option channel |
+| CBOE delayed quote pages | **`FORBIDDEN`** |
+| ES future | `UNKNOWN` |
 
-**CBOE uyarısı:** otomatik çekimi açıkça yasaklıyor ve IP engellediğini belirtiyor.
-Boru hattına konmayacak. Elle bakmak serbest.
+**CBOE warning:** automated collection is explicitly forbidden and they state that
+they block IPs. It will not go into the pipeline. Looking by hand is fine.
 
-**İyi haber:** Polymarket marketi zaten SPY üzerine yazılıyor (kural metni: Pyth,
-normal seans, bölünme düzeltmeli). Yani SPY opsiyonuyla karşılaştırmak daha doğru;
-endeks/ETF sorusu kendiliğinden çözülüyor (D-012).
+**The good news:** the Polymarket market is already written on SPY (rule text:
+Pyth, regular session, split-adjusted). So comparing against SPY options is the
+more correct thing to do, and the index-versus-ETF question resolves itself
+(D-012).
 
 ---
 
-## 5. Hisse senetleri (Mag7)
+## 5. Equities (Mag7)
 
-| Kaynak | Ücretsiz koşulu | Not |
+| Source | Free tier | Note |
 |---|---|---|
-| yfinance (Yahoo) | anahtarsız | Resmî API değil. Doğrudan HTTP veri merkezi IP'lerinden engelli; kütüphane Colab'dan çalıştı. |
-| Finnhub | 60 çağrı/dk, 20 dk gecikme | Ücretsiz katmanların en cömerti |
-| Polygon.io | 5 çağrı/dk | Yavaş ama çalışır |
-| Alpha Vantage | **25 çağrı/gün** | Pratikte kullanılamaz |
+| yfinance (Yahoo) | no key | Not an official API. Direct HTTP is blocked from data-centre IPs; the library worked from Colab. |
+| Finnhub | 60 calls/min, 20 min delay | The most generous free tier |
+| Polygon.io | 5 calls/min | Slow but it works |
+| Alpha Vantage | **25 calls/day** | Not usable in practice |
 
-### Ama darboğaz opsiyon tarafında değil (D-021)
+### But the bottleneck is not on the option side (D-021)
 
-Önce "hisseler en kolay taraf" demiştim; yalnızca **veri erişimine** bakmıştım,
-**likiditeye** bakmamıştım. Ölçüm:
+I first said equities were the easy side. I had only looked at **data access**, not
+at **liquidity**. Measured:
 
-| Varlık | Basamak | Medyan makas | Ölçülebilir |
+| Asset | Rungs | Median spread | Measurable |
 |---|---|---|---|
-| BTC | 22 | 0,002 | **20** |
-| SPY | 14 | 0,024 | 2 |
-| NVDA | 14 | 0,074 | **0** |
-| META | 14 | 0,090 | 1 |
-| TSLA | 14 | 0,099 | 1 |
+| BTC | 22 | 0.002 | **20** |
+| SPY | 14 | 0.024 | 2 |
+| NVDA | 14 | 0.074 | **0** |
+| META | 14 | 0.090 | 1 |
+| TSLA | 14 | 0.099 | 1 |
 
-Ölçülebilir = makas ≤ 0,02 **ve** mid < 0,99. Eşiğin gerekçesi: BTC'de ölçtüğümüz
-farklar 0,006–0,026 aralığındaydı; makas bundan büyükse üretilen sayı piyasa
-görüşü değil makasın kendisidir.
+Measurable = spread ≤ 0.02 **and** mid < 0.99. The reason for the threshold: the
+gaps we measured on BTC were in the 0.006–0.026 range; if the spread is wider than
+that, the number produced is the spread, not a market view.
 
-**Hisseler üründen çıkarılmıyor:** listede görünürler, sayı yerine gerekçeli
-"ölçülemez" etiketi taşırlar.
+**Equities are not dropped from the product:** they appear in the list, carrying a
+reasoned "not measurable" label instead of a number.
 
 ---
 
-## 6. Özet
+## 6. Summary
 
-| Varlık | Prediction market | Opsiyon zinciri | Durum |
+| Asset | Prediction market | Option chain | Status |
 |---|---|---|---|
-| BTC | çok derin | Deribit call+put | **çalışıyor** |
-| ETH | derin | Deribit call+put | **çalışıyor** |
-| SPY | 14 touch aylık | ücretsiz kanal | merdiven likiditesi zayıf |
-| TSLA/NVDA/META | 14'er touch | ücretsiz kanal | **ölçülemiyor** — makas |
-| Altın/Gümüş/Petrol | var | yalnızca ETF vekili | vekil hatası taşır |
+| BTC | very deep | Deribit calls + puts | **working** |
+| ETH | deep | Deribit calls + puts | **working** |
+| SPY | 14 monthly touch | free channel | ladder liquidity is weak |
+| TSLA/NVDA/META | 14 touch each | free channel | **not measurable** — spread |
+| Gold/Silver/Oil | present | ETF proxy only | carries proxy error |
 
 ---
 
 ## Data rights — what we checked and where we stand
 
-Checked 2026-09-11 by reading the current terms of all three venues. Not legal advice;
-this is a record of what the documents say and what we decided.
+Checked 2026-09-11 by reading the current terms of all three venues. Not legal
+advice; this is a record of what the documents say and what we decided.
 
 ### What the terms say
 
@@ -215,21 +222,35 @@ encouraged. The thing that made us different from every other tool in the ecosys
 was not the analysis — it was that we published a continuously growing archive of raw
 vendor payloads. Other tools display data; none redistribute it in bulk.
 
-That is the specific practice the Kalshi clause names, and it is the one we changed.
+That is the specific practice the Kalshi clause names.
 
-### What we changed
+### The rolling window is decided but NOT yet implemented
 
-`raw/` is now a **rolling 14-day window** (`ARSIV_GUN` in `collector/collect.py`).
-What remains is a research sample large enough to reproduce the published findings —
-about 42 snapshots — rather than an indefinite feed. The same change caps repository
-growth, which was measured at 4.03 MB/day and would have reached roughly 1.44 GB in a
-year against GitHub's 1 GB guidance.
+The decision was to keep `raw/` as a rolling window of about 14 days: enough of a
+research sample to reproduce the published findings, rather than an indefinite
+feed. The same change caps repository growth, measured at 4.03 MB/day, which would
+have reached roughly 1.44 GB in a year against GitHub's 1 GB guidance.
+
+**As of 2026-09-13 that pruning does not exist.** `scripts/prune_archive.py` has not
+been written and `collect.yml` has no pruning step. The archive is 14 days long
+because collection started 14 days ago, not because anything is trimming it.
+Tomorrow it will be 15 days and it will keep growing.
+
+An earlier version of this document said the window was in place, citing a
+constant in `collector/collect.py`. That constant was removed when it broke the
+collector, and this paragraph was not updated with it. Corrected on 2026-09-13.
+
+The ordering, when it is built, matters: pruning runs **after** the private mirror
+has been updated successfully in the workflow. If the mirror step is skipped,
+pruning must be skipped too, otherwise data is lost silently.
 
 ### Still open
 
 - Kalshi's API Developer Agreement is unread. Until it is, the Kalshi position rests on
   website terms that may not be the governing document.
-- No written permission has been requested from any venue. All three have a
+- Pruning is not implemented, so the bulk-archive practice the Kalshi clause names
+  is still in effect on the public repository.
+- No written permission has been requested from any venue. All three have an
   "unless agreed in writing" carve-out; none has been exercised.
 - Deribit's "derived data" wording arguably reaches `findings/latest.json`. We publish
   it because it is a research result rather than a data feed, but that is our reading,
