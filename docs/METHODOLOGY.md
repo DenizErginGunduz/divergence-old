@@ -1,158 +1,173 @@
 # METHODOLOGY.md
 
-Güncelleme: 2026-08-30. Bu belgenin önceki sürümü üç yerde yanlıştı; düzeltmeler
-gerekçesiyle birlikte aşağıda ve `DECISIONS.md`'de duruyor.
+Updated 2026-08-30. The previous version of this document was wrong in three
+places; the corrections and their reasons are below and in `DECISIONS.md`.
 
-| Katman | Durum | Kanıt |
+| Layer | Status | Evidence |
 |---|---|---|
-| 1 — merdiven → yoğunluk | **doğrulandı** | ETH ort. mutlak hata 0,0014 |
-| 2 — vadeli tutarlılık | **doğrulandı** | put-call paritesi, 21 strike, %0,146 dağılım (D-036) |
-| 3 — touch primi alt sınırı | **doğrulandı** | sert alt sınır 19/19 (D-018, D-030) |
-| 4 — Breeden–Litzenberger | veri hazır | strike ızgarası kanatlarda seyrek |
+| 1 — ladder to density | **verified** | ETH mean absolute error 0.0014 |
+| 2 — futures consistency | **verified** | put-call parity, 21 strikes, 0.146% dispersion (D-036) |
+| 3 — touch premium lower bound | **verified** | hard lower bound held 19/19 (D-018, D-030) |
+| 4 — Breeden–Litzenberger | data ready | the strike grid is sparse in the wings |
 
 ---
 
-## 0. Köprü — iki aracı aynı birime çevirmek
+## 0. The bridge — putting two instruments in the same unit
 
-**Adım 1 — Prediction tarafını olasılığa çevir.**
-Binary kontratın fiyatı zaten olasılık birimindedir. Ama **orta fiyat kullanılmaz**:
-ince merdivende orta fiyat kimsenin işlem yapmadığı hayali bir sayıdır. Alış ve
-satış ayrı ayrı karşılaştırılır (D-024). Tek taraflı kitapta `UNKNOWN`, sıfır değil.
+**Step 1 — put the prediction side into probability.**
+A binary contract's price is already in probability units. But **the mid is not
+used**: on a thin ladder the mid is an imaginary number nobody trades at. Bid and
+ask are compared separately (D-024). On a one-sided book the answer is `UNKNOWN`,
+not zero.
 
-**Adım 2 — Opsiyon tarafını olasılığa çevir.**
-Call fiyatı olasılık değildir. Terminal olasılık dijital yaklaşımıyla çıkarılır:
+**Step 2 — put the option side into probability.**
+A call price is not a probability. The terminal probability comes out of the
+digital approximation:
 
     P(S_T > K) ≈ −∂C/∂K ≈ [C(K₁) − C(K₂)] / (K₂ − K₁)
 
-Bu bir model değil, türevin sayısal yaklaşımıdır. **Birincil yöntem budur** (D-027).
+This is not a model, it is a numerical approximation of a derivative. **It is the
+primary method** (D-027).
 
-**Adım 3 — Kontrat tipini eşleştir.** Atlanamaz, bkz. bölüm 2.
+**Step 3 — match the contract type.** Not skippable; see section 2.
 
 ---
 
-## 0a. İki tuzak — ikisi de bu projede ölçüldü
+## 0a. Two traps — both of them measured in this project
 
-### Tuzak 1: yanlış enstrüman (D-025, D-035)
-Aşağı yön olasılığını derin ITM call'dan türetmek, küçük bir farkı iki büyük
-sayının farkından okumaktır. Put-call paritesi gereği iki yol **aynı sayıyı
-vermek zorundadır**; ayrılma doğrudan ölçüm hatasıdır:
+### Trap 1: the wrong instrument (D-025, D-035)
+Deriving a downside probability from a deep ITM call means reading a small
+difference off the difference of two large numbers. Put-call parity says the two
+routes **must give the same number**; any divergence is measurement error,
+directly:
 
-| zaman değeri / fiyat | %86 | %35 | %12 | %4,8 | %1,2 | %0,4 |
+| time value / price | 86% | 35% | 12% | 4.8% | 1.2% | 0.4% |
 |---|---|---|---|---|---|---|
-| call yolu / put yolu | 1,01 | 1,01 | 1,02 | 1,04 | 1,28 | **2,09** |
+| call route / put route | 1.01 | 1.01 | 1.02 | 1.04 | 1.28 | **2.09** |
 
-**Kural:** yukarı yön OTM call, aşağı yön OTM put. Zaman değeri payı < %5 ise
-o basamak `ÖLÇÜLEMEZ`. Put zinciri yoksa aşağı yön için sayı üretilmez.
+**Rule:** upside from OTM calls, downside from OTM puts. If time value is under
+5% of the price, that rung is `NOT MEASURABLE`. With no put chain, no downside
+number is produced at all.
 
-### Tuzak 2: skew'i yok saymak (D-027, D-029)
-`C`, `K`'ya iki yoldan bağlıdır — doğrudan ve IV eğrisi üzerinden:
+### Trap 2: ignoring skew (D-027, D-029)
+`C` depends on `K` two ways — directly, and through the IV curve:
 
     dC/dK = (∂C/∂K)|σ + vega · (∂σ/∂K)
 
-Naif `N(d2)` ikinci terimi atar. BTC aylık zincirinde ölçülen bedel: modelsiz
-hakeme göre ortalama **%54,8**, kanatlarda **%334** sapma. Skew terimi eklenince
-sapma **%1,9**'a düşüyor. Günlük zincirde etki yok — vade 0,4 gün, vega ≈ 0.
+A naive `N(d2)` drops the second term. Measured cost on the BTC monthly chain:
+**54.8%** mean deviation against a model-free referee, **334%** in the wings.
+With the skew term added the deviation falls to **1.9%**. On the daily chain there
+is no effect — 0.4 days to expiry, vega ≈ 0.
 
-**Sonuç:** skew düzeltmesi orta/uzun vadede zorunlu; bu, orta vade önceliğinin
-ikinci bağımsız gerekçesi.
+**Consequence:** the skew correction is mandatory at medium and long tenors. That
+is the second independent reason for prioritising the medium tenor.
 
 ---
 
-## 1. Katman 1 — merdiven → ayrık yoğunluk
+## 1. Layer 1 — ladder to discrete density
 
-    P(S_T > K_j) = Σ_{i ≥ j} P(kova_i)
+    P(S_T > K_j) = Σ_{i ≥ j} P(bucket_i)
 
-| Varlık | Snapshot yayılması | Ort. mutlak fark | Maks. |
+| Asset | Snapshot spread | Mean absolute difference | Max |
 |---|---|---|---|
-| **ETH** | ~2 dakika | **0,0014** | 0,0040 |
-| **BTC** | ~3,5 saat | 0,0123 | 0,0899 |
+| **ETH** | ~2 minutes | **0.0014** | 0.0040 |
+| **BTC** | ~3.5 hours | 0.0123 | 0.0899 |
 
-Eşzamanlı iki bağımsız merdiven birbirini 0,14 puan hatayla doğruluyor — hem
-dönüşümün hem sınıflandırmanın kanıtı. 3,5 saatlik kayma hatayı 9 kat büyütüyor;
-bu piyasa tutarsızlığı değil **ölçüm hatasıdır**.
+Two independent ladders read simultaneously confirm each other to within 0.14
+points — evidence for both the conversion and the classification. A 3.5 hour drift
+multiplies the error by nine; that is **measurement error**, not a market
+inconsistency.
 
-**Tükenmişlik şartı:** kümülatif yalnızca kova seti tüm sonuç uzayını kapsıyorsa
-geçerlidir. Alt kuyruk kovası yoksa o bölge okunmaz. Betik otomatik uyarır.
+**Exhaustiveness condition:** the cumulative is only valid if the bucket set
+covers the whole outcome space. With no lower-tail bucket, that region cannot be
+read. The script warns automatically.
 
 ---
 
-## 2. Kontrat tipi eşleştirmesi
+## 2. Contract type matching
 
-| Tip | Sorduğu soru | Opsiyon karşılığı |
+| Type | The question it asks | Option counterpart |
 |---|---|---|
-| `terminal` | `P(S_T > K)` | dijital yaklaşımı, model yok |
-| `range` | `P(K₁ < S_T ≤ K₂)` | iki dijitalin farkı, model yok |
-| `touch` | `P(max S_t ≥ K)` | doğrudan karşılığı yok — alt sınır ilişkisi var |
+| `terminal` | `P(S_T > K)` | digital approximation, no model |
+| `range` | `P(K₁ < S_T ≤ K₂)` | difference of two digitals, no model |
+| `touch` | `P(max S_t ≥ K)` | no direct counterpart — a bound relation exists |
 
-**Önceki sürümdeki hata:** "touch opsiyonla karşılaştırılmayacak" demiştim.
-Yanlıştı. Terminal taraf opsiyondan gelebilir ve şu ilişki **tanım gereği** doğrudur:
+**The error in the previous version:** it said "touch will not be compared against
+options". That was wrong. The terminal side can come from options, and this
+relation is true **by definition**:
 
-    P(vade içinde K'ya değme) ≥ P(vadede K'nın ötesinde kapanma)
+    P(touching K before expiry) ≥ P(closing beyond K at expiry)
 
-Bu sert alt sınır 19/19 basamakta sağlandı — sınıflandırmanın bağımsız kanıtı.
+This hard lower bound held on 19 of 19 rungs — independent evidence that the
+classification is right.
 
-**Üst sınır "2" ise bir sabit DEĞİLDİR (D-031).** O sayı sürüklenmesiz aritmetik
-Brownian hareketten gelir. Fiyat lognormaldir; ileri ölçüde martingal olsa bile
-log-fiyatın sürüklenmesi −σ²/2'dir. Tam formül her basamağa kendi üst sınırını
-verir (ölçülen aralık 1,94–2,07). Sabit kullanmak yukarı yönde fazla gevşek,
-aşağı yönde fazla sıkı bir sınır üretiyordu.
-
----
-
-## 3. Fark neyin karşısında ölçülür — sıfır değil, kendi tarihi
-
-Mükemmel veriyle bile opsiyon-implied olasılık gerçek frekansa eşit olmaz:
-**varyans risk primi** vardır. "Prediction market opsiyona göre ucuz" satırları
-çoğunlukla yapısaldır, fırsat değil.
-
-    fark_t   = P_prediction − P_türev
-    referans = aynı varlık + benzer vade için farkın geçmiş medyanı
-    konum    = (fark_t − referans) / farkın geçmiş standart sapması
-
-Ekranda "fark %8" değil, "fark %8, tipik %6, alışılmışın 1,2 sigma üstünde".
-Referans birikmeden gösterge **üretilmez**.
+**The upper bound "2" is NOT a constant (D-031).** That number comes from
+driftless arithmetic Brownian motion. Price is lognormal; even when the forward is
+a martingale, the log-price drifts at −σ²/2. The full formula gives every rung its
+own upper bound (measured range 1.94–2.07). Using the constant produced a bound
+that was too loose on the upside and too tight on the downside.
 
 ---
 
-## 4. İki görünüm
+## 3. What the gap is measured against — not zero, its own history
 
-**Hedge görünümü** — touch merdiveni + vadeli/spot. Opsiyon gerekmez. Kontratı
-olasılık tahmini olarak değil koşullu emir maliyeti olarak okur. Bugün çalışır.
+Even with perfect data the options-implied probability does not equal the realised
+frequency: there is a **variance risk premium**. Rows reading "the prediction
+market is cheap against options" are mostly structural, not an opportunity.
 
-**Fiyatlama görünümü** — terminal/range merdiveni + opsiyon zinciri.
-Katman 1, 2 ve 4 burada. Model içermeyen tek karşılaştırma. Önce BTC/ETH.
+    gap_t     = P_prediction − P_derivative
+    reference = the historical median of the gap for the same asset and a
+                comparable tenor
+    position  = (gap_t − reference) / the historical standard deviation of the gap
 
----
-
-## 5. Ekranda zorunlu alanlar
-
-`kontrat_tipi`, `dayanak_referansı`, `çözünürlük_kaynağı`, `vade`,
-`snapshot_zamanı` (her iki taraf için ayrı), `alış-satış makası`, `hacim`.
-
-Bunlardan biri eksikken gösterilen fark yorumlanamaz. Özellikle makas: ince
-merdivenlerde makas, ölçtüğümüz farkın kendisinden büyük olabilir.
-
-Toplayıcı her koşuda `sync_window_seconds` yazar — iki fiyat tarafı arasındaki
-kayma. Ölçülen değer 0,75–1,97 sn aralığında; D-015'teki 8 dakikalık kayma farkı
-%33 oynatıyordu.
+The screen does not say "gap 8%", it says "gap 8%, typical 6%, 1.2 sigma above
+usual". Until the reference has accumulated, **no indicator is produced**.
 
 ---
 
-## 6. Terminoloji
+## 4. Two views
 
-Kullanılmaz: "gerçek olasılık", "doğru olasılık", "AI olasılığı",
-"arbitraj fırsatı", "insider", "akıllı para".
+**Hedge view** — touch ladder plus futures or spot. Needs no options. It reads the
+contract not as a probability estimate but as the cost of a conditional order.
+This works today.
 
-Kullanılır: prediction-market-implied probability, options-implied risk-neutral
+**Pricing view** — terminal or range ladder plus the option chain. Layers 1, 2 and
+4 live here. It is the only comparison that contains no model. BTC and ETH first.
+
+---
+
+## 5. Fields required on screen
+
+`contract_type`, `underlying_reference`, `settlement_source`, `expiry`,
+`snapshot_time` (separately for each side), `bid-ask spread`, `volume`.
+
+A gap shown while any one of these is missing cannot be interpreted. The spread
+especially: on thin ladders it can be larger than the gap being measured.
+
+The collector writes `sync_window_seconds` on every run — the drift between the
+two price sides. Measured range is 0.75 to 1.97 seconds; the eight-minute drift in
+D-015 moved a result by 33%.
+
+---
+
+## 6. Terminology
+
+Not used: "true probability", "correct probability", "AI probability",
+"arbitrage opportunity", "insider", "smart money".
+
+Used: prediction-market-implied probability, options-implied risk-neutral
 probability, cross-market probability gap, terminal probability, touch probability,
-büyük işlem, yoğunlaşmış pozisyon, geçmiş çözünürlük performansı.
+large trade, concentrated position, historical settlement performance.
 
 ---
 
-## 7. Açık kalanlar
+## 7. Still open
 
-- Katman 4 (Breeden–Litzenberger) hesabı kurulmadı; veri hazır.
-- Referans birikimi başladı (2026-08-30) ama henüz istatistik üretecek uzunlukta değil.
-- `data-api` `offset` desteği doğrulanmadı — boşluk oluşmadığı için tetiklenmedi (D-042).
-- 5 Ağustos ölçümü bayat: BTC o tarihten beri %19,9 hareket etti ve o günün put
-  zinciri geri getirilemez. Ölçüm eşzamanlı veriyle sıfırdan tekrarlanmalı (D-037).
+- Layer 4 (Breeden–Litzenberger) is not built; the data is ready.
+- Reference accumulation started 2026-08-30 but is not yet long enough to produce
+  a statistic.
+- `data-api` `offset` support is unverified — no gap has occurred, so it has never
+  been triggered (D-042).
+- The 5 August measurement is stale: BTC has moved 19.9% since, and that day's put
+  chain cannot be recovered. The measurement has to be redone from scratch on
+  simultaneous data (D-037).
