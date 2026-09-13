@@ -1,129 +1,135 @@
 #!/usr/bin/env python3
-"""Karar referansi denetleyicisi.
+"""Decision reference checker.
 
-Neden var: arayuzdeki bulgu kartlari "D-049", "D-045 · D-046 · D-066" gibi
-karar numaralari basiyordu, ama o kararlar DECISIONS.md'ye hic yazilmamisti.
-Yani ekran, var olmayan kayitlara atif yapiyordu. Bunu bir insan fark etti,
-kod degil. Olcum titizligi iddia eden bir projede en kotu turden acik.
+Why it exists: the finding cards in the interface printed decision numbers like
+"D-049" and "D-045 . D-046 . D-066", but those decisions had never been written
+into DECISIONS.md. The screen was citing records that did not exist. A human
+noticed, not the code. In a project that claims measurement rigour that is the
+worst kind of hole.
 
-Ne yapar:
-  1. Repodaki metin dosyalarini tarar, D-\\d{3} bicimindeki her atifi toplar.
-  2. DECISIONS.md'deki "## D-XXX" basliklarini tanimli kabul eder.
-  3. Tanimi olmayan atif varsa HATA verir (cikis 1).
+What it does:
+  1. Scans the text files in the repository and collects every D-\d{3} citation.
+  2. Treats the "## D-XXX" headings in DECISIONS.md as definitions.
+  3. FAILS (exit 1) if any citation has no definition.
 
-Kullanim:
-    python scripts/ref_check.py            # denetle
-    python scripts/ref_check.py --liste    # her atifin nerede gectigini de yaz
+Usage:
+    python scripts/ref_check.py              # check
+    python scripts/ref_check.py --list       # also print where each one occurs
 """
 import os
 import re
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-KARAR_DOSYASI = os.path.join('docs', 'DECISIONS.md')
+DECISIONS_FILE = os.path.join('docs', 'DECISIONS.md')
 
-# Ham arsiv taranmaz: orada karar atifi olmaz, dosyalar buyuk ve degismezdir.
-ATLA_KLASOR = {'.git', 'raw', 'state', '__pycache__', 'node_modules'}
-TARA_UZANTI = {'.md', '.py', '.html', '.yml', '.yaml', '.json', '.txt', '.js', '.css'}
+# The raw archive is not scanned: it holds no citations, and the files are large
+# and immutable.
+SKIP_DIRS = {'.git', 'raw', 'state', '__pycache__', 'node_modules'}
+SCAN_EXT = {'.md', '.py', '.html', '.yml', '.yaml', '.json', '.txt', '.js', '.css'}
 
-ATIF = re.compile(r'\bD-(\d{3})\b')
-TANIM = re.compile(r'^##\s+(D-\d{3})', re.MULTILINE)
-
-
-def dosyalar():
-    for kok, klasorler, adlar in os.walk(ROOT):
-        klasorler[:] = [k for k in klasorler if k not in ATLA_KLASOR]
-        for ad in adlar:
-            if os.path.splitext(ad)[1].lower() in TARA_UZANTI:
-                tam = os.path.join(kok, ad)
-                yield tam, os.path.relpath(tam, ROOT).replace(os.sep, '/')
+CITATION = re.compile(r'\bD-(\d{3})\b')
+DEFINITION = re.compile(r'^##\s+(D-\d{3})', re.MULTILINE)
 
 
-def kendi_testi():
-    """Denetleyicinin gercekten HATA verebildigini kanitlar.
+def files():
+    for base, dirs, names in os.walk(ROOT):
+        dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+        for name in names:
+            if os.path.splitext(name)[1].lower() in SCAN_EXT:
+                full = os.path.join(base, name)
+                yield full, os.path.relpath(full, ROOT).replace(os.sep, '/')
 
-    Yesil kalan ama hicbir seyi yakalamayan bir denetleyici, denetleyici degildir.
-    CI'da once bu kosar: yakalama yetenegi kanitlanmadan asil denetim anlamsiz.
+
+def self_test():
+    """Proves the checker can actually FAIL.
+
+    A checker that stays green while catching nothing is not a checker. This runs
+    first in CI: until the ability to catch is proven, the real check means
+    nothing.
     """
-    # Ornek numaralar PARCALI kuruluyor: kaynakta duz bir numara yazsaydi
-    # denetleyici kendi test verisini gercek bir atif sanip kendini kirardi.
-    # Tam olarak bu oldu — ilk surum CI'da patladi. Aracin calistiginin kaniti,
-    # ama test verisi uretim verisine benzememeli.
+    # The sample numbers are built PIECEWISE: had a plain number been written in
+    # the source, the checker would read its own test data as a real citation and
+    # break itself. That is exactly what happened — the first version failed in
+    # CI. Proof that the tool works, but test data must not resemble production
+    # data.
     P = 'D-'
-    ornek_karar = ('## %s001 — gercek karar\n'
-                   '## %s002 — ikinci karar\n'
-                   'govde metni\n') % (P, P)
-    ornek_metin = 'burada %s001, %s002 ve tanimsiz %s999 aniliyor\n' % (P, P, P)
+    sample_decisions = ('## %s001 - a real decision\n'
+                        '## %s002 - a second decision\n'
+                        'body text\n') % (P, P)
+    sample_text = 'mentions %s001, %s002 and the undefined %s999\n' % (P, P, P)
 
-    tanimli = set(TANIM.findall(ornek_karar))
-    atif = {P + m.group(1) for m in ATIF.finditer(ornek_metin)}
-    asili = sorted(a for a in atif if a not in tanimli)
+    defined = set(DEFINITION.findall(sample_decisions))
+    cited = {P + m.group(1) for m in CITATION.finditer(sample_text)}
+    dangling = sorted(c for c in cited if c not in defined)
 
-    sorun = []
-    if tanimli != {P + '001', P + '002'}:
-        sorun.append('tanim taninmadi: %s' % sorted(tanimli))
-    if atif != {P + '001', P + '002', P + '999'}:
-        sorun.append('atif taranmadi: %s' % sorted(atif))
-    if asili != [P + '999']:
-        sorun.append('asili referans YAKALANMADI: %s' % asili)
+    problems = []
+    if defined != {P + '001', P + '002'}:
+        problems.append('definitions not recognised: %s' % sorted(defined))
+    if cited != {P + '001', P + '002', P + '999'}:
+        problems.append('citations not scanned: %s' % sorted(cited))
+    if dangling != [P + '999']:
+        problems.append('dangling reference NOT CAUGHT: %s' % dangling)
 
-    if sorun:
-        print('KENDI TESTI BASARISIZ:')
-        for s in sorun:
-            print('  - %s' % s)
+    if problems:
+        print('SELF-TEST FAILED:')
+        for p in problems:
+            print('  - %s' % p)
         return 1
-    print('kendi testi: gecti — asili referans yakalaniyor')
+    print('self-test: passed - a dangling reference is caught')
     return 0
 
 
 def main():
-    ayrinti = '--liste' in sys.argv
-    if '--kendi-testi' in sys.argv:
-        return kendi_testi()
+    verbose = '--list' in sys.argv
+    if '--self-test' in sys.argv:
+        return self_test()
 
-    kp = os.path.join(ROOT, KARAR_DOSYASI)
-    if not os.path.isfile(kp):
-        print('HATA: %s bulunamadi' % KARAR_DOSYASI)
+    dp = os.path.join(ROOT, DECISIONS_FILE)
+    if not os.path.isfile(dp):
+        print('ERROR: %s not found' % DECISIONS_FILE)
         return 1
-    kararlar = open(kp, encoding='utf-8').read()
-    tanimli = set(TANIM.findall(kararlar))
+    decisions = open(dp, encoding='utf-8').read()
+    defined = set(DEFINITION.findall(decisions))
 
-    nerede = {}
-    for tam, rel in dosyalar():
+    where = {}
+    for full, rel in files():
         try:
-            metin = open(tam, encoding='utf-8').read()
+            text = open(full, encoding='utf-8').read()
         except (UnicodeDecodeError, OSError):
             continue
-        for m in ATIF.finditer(metin):
-            no = 'D-' + m.group(1)
-            nerede.setdefault(no, set()).add(rel)
+        for m in CITATION.finditer(text):
+            num = 'D-' + m.group(1)
+            where.setdefault(num, set()).add(rel)
 
-    asili = sorted(n for n in nerede if n not in tanimli)
+    dangling = sorted(n for n in where if n not in defined)
 
-    taranan = sum(1 for _ in dosyalar())
-    print('taranan dosya   : %d' % taranan)
-    print('tanimli karar   : %d' % len(tanimli))
-    print('atif yapilan    : %d' % len(nerede))
+    scanned = sum(1 for _ in files())
+    print('files scanned     : %d' % scanned)
+    print('decisions defined : %d' % len(defined))
+    print('decisions cited   : %d' % len(where))
 
-    # Bos tarama sessizce yesil kalmasin: yol yanlissa denetim hicbir sey demiyordur.
-    if taranan < 5 or not tanimli:
-        print('\nHATA: tarama bos dondu (dosya=%d, tanim=%d). ROOT yanlis olabilir: %s'
-              % (taranan, len(tanimli), ROOT))
+    # An empty scan must not pass quietly: if the path is wrong the check is
+    # saying nothing at all.
+    if scanned < 5 or not defined:
+        print('\nERROR: the scan came back empty (files=%d, definitions=%d). '
+              'ROOT may be wrong: %s' % (scanned, len(defined), ROOT))
         return 1
 
-    if ayrinti:
-        for no in sorted(nerede):
-            print('  %s  <- %s' % (no, ', '.join(sorted(nerede[no]))))
+    if verbose:
+        for num in sorted(where):
+            print('  %s  <- %s' % (num, ', '.join(sorted(where[num]))))
 
-    if asili:
-        print('\nASILI REFERANS (%d) — tanimi yok:' % len(asili))
-        for no in asili:
-            print('  %-7s <- %s' % (no, ', '.join(sorted(nerede[no]))))
-        print('\nKarar yazilmadan numara anilmaz. Ya kayit yazilir, ya atif')
-        print('kaldirilir. Bilgi tasimayan numara zaten atif degildir.')
+    if dangling:
+        print('\nDANGLING REFERENCE (%d) - no definition:' % len(dangling))
+        for num in dangling:
+            print('  %-7s <- %s' % (num, ', '.join(sorted(where[num]))))
+        print('\nA number is not cited before the decision is written. Either the')
+        print('record gets written or the citation goes. A number that carries no')
+        print('information was never a citation to begin with.')
         return 1
 
-    print('\nasili referans yok.')
+    print('\nno dangling references.')
     return 0
 
 
