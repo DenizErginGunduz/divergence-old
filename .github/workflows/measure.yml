@@ -64,7 +64,11 @@ jobs:
       - name: Write findings
         run: python scripts/write_findings.py
 
+      # Only on a manual run. On a pull_request the checkout is a detached merge
+      # commit with no upstream branch, so a push cannot succeed — and a PR run
+      # should prove the numbers, not write to the branch.
       - name: Commit findings/ if it changed
+        if: github.event_name == 'workflow_dispatch'
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
