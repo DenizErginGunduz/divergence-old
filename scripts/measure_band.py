@@ -135,7 +135,7 @@ def digital(ch, expiry, K, F, idx):
 
 def rungs(KA, D, series, currency):
     """Band arithmetic for every rung of one Kalshi bucket ladder."""
-    M = [m for m in (KA.get('marketler', {}).get(series) or [])
+    M = [m for m in (KA.get('markets', {}).get(series) or [])
          if m.get('status') == 'active']
     if not M:
         return None
