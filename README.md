@@ -62,7 +62,7 @@ Python 3.12. **No dependencies** — standard library only, nothing to install.
 ```bash
 git clone https://github.com/DenizErginGunduz/divergence.git
 cd divergence
-python scripts/arsiv.py           # reads the archive, prints what it found
+python scripts/archive.py         # reads the archive, prints what it found
 python scripts/write_findings.py  # runs every measurement, writes findings/latest.json
 ```
 

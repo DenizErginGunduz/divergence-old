@@ -72,7 +72,7 @@ hiçbir şey kaybettirmiyor, en yoğununda kaybettirebilir — bu yüzden toplay
 boşluğu tespit edip bayrak koyuyor.
 
 **`offset` sayfalama desteği doğrulanmadı (D-042).** Betik varsaymıyor: deniyor
-ve sonucu `sayfalama_calisti` alanına yazıyor. Boşluk oluşmadığı için henüz
+ve sonucu `pagination_worked` alanına yazıyor. Boşluk oluşmadığı için henüz
 tetiklenmedi.
 
 **Not — coğrafi engel:** Polymarket Türkiye'den erişime kapalı. Bu boru hattını

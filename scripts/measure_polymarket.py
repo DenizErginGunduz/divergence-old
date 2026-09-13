@@ -1,230 +1,234 @@
 #!/usr/bin/env python3
-"""Polymarket kisa vadeli terminal merdivenleri — ucuncu bagimsiz kurulum.
+"""Polymarket short-dated terminal ladders — the third independent setup.
 
-NEDEN AYRI BIR OLCUM
-Ayni sekli (prediction market'in olasi olmayan sonucu opsiyondan zengin
-fiyatlamasi) uc farkli kurulumda gormek, tek kurulumda gormekten cok daha
-guclu. Kalshi yil sonu kovalari ve uzun ufuk touch siniri olculdu; bu betik
-ucuncusunu, Polymarket gunluk esik merdivenlerini olcuyor.
+WHY A SEPARATE MEASUREMENT
+Seeing the same shape (the prediction market pricing the unlikely outcome
+richer than the option chain) in three different setups is far stronger than
+seeing it in one. The Kalshi year-end buckets and the long-horizon touch bound
+are already measured; this script measures the third, Polymarket's daily
+threshold ladders.
 
-TOUCH / TERMINAL AYRIMI — BU BETIGIN EN HASSAS NOKTASI
-Polymarket'te iki farkli soru tipi ic ice duruyor:
+TOUCH / TERMINAL — THE MOST DELICATE POINT IN THIS SCRIPT
+Two different question types sit side by side on Polymarket:
 
-  "What price will Bitcoin hit in September?"     -> TOUCH  (yol bagimli)
+  "What price will Bitcoin hit in September?"     -> TOUCH  (path dependent)
   "Bitcoin above ___ on September 11?"            -> TERMINAL
-  "Bitcoin price on September 11?"                -> TERMINAL (kova)
+  "Bitcoin price on September 11?"                -> TERMINAL (bucket)
 
-"hit" kelimesi vade icinde HERHANGI BIR AN degmeyi sorar. Touch olasiligi
-ayni seviyedeki terminal olasiligindan her zaman buyuk veya ona esittir.
-Ikisini karistirmak butun hesabi sistematik olarak bozar. Bu betik touch
-merdivenlerini ACIKCA disarida birakir ve kac tanesini eledigini raporlar.
+The word "hit" asks about touching the level at ANY moment before expiry.
+Touch probability is always greater than or equal to terminal probability at
+the same level. Conflating them breaks the whole computation systematically.
+This script EXCLUDES touch ladders explicitly and reports how many it dropped.
 
-VADE VE COZUNURLUK BOSLUGU — GIZLENMIYOR
-Polymarket gunluk merdivenler 16:00 UTC'de, Binance BTC/USDT 1 dakikalik
-mum kapanisiyla cozuluyor. Deribit opsiyonlari 08:00 UTC'de, Deribit
-endeksiyle. Yani:
+EXPIRY AND SETTLEMENT GAP — NOT HIDDEN
+Polymarket daily ladders resolve at 16:00 UTC on the Binance BTC/USDT
+one-minute candle close. Deribit options expire at 08:00 UTC on the Deribit
+index. So:
 
-  - zaman boslugu : opsiyon vadesi tipik olarak 8 saat ONCE
-  - kaynak farki  : Binance spot vs Deribit endeksi
+  - time gap   : the option expiry is typically 8 hours EARLIER
+  - source gap : Binance spot vs the Deribit index
 
-Opsiyon vadesi daha erken oldugu icin opsiyonun ima ettigi dagilim daha
-DAR olur; dijitaller 0 ve 1'e olduklarindan daha yakin cikar. Bu, farki
-bizim lehimize sisirebilecek bir sapmadir. O yuzden her satirda boslugun
-kac saat oldugu yaziliyor ve ozet, boslugun buyuklugune gore ayriliyor.
+Because the option expires earlier its implied distribution is NARROWER; the
+digitals come out closer to 0 and 1 than they should. That is a bias which can
+inflate the gap in our favour. So every row carries the gap in hours, and the
+summary is split by how large the gap is.
 
-Kullanim:
+Usage:
     python scripts/measure_polymarket.py
-    python scripts/measure_polymarket.py --son 5
+    python scripts/measure_polymarket.py --last 5
 """
 import re
 import sys
 
-from arsiv import anlik_goruntu, anlar, ozet, Eksik
-from measure_band import zincir, forward, dijital, AY
-from kararlilik import Kararlilik
+from archive import snapshot, stamps, summary, Missing
+from measure_band import chain, forward, digital, MONTH
+from stability import Stability
 
-VARLIKLAR = [('BTC', 'bitcoin', 'BTC'), ('ETH', 'ethereum', 'ETH')]
+ASSETS = [('BTC', 'bitcoin', 'BTC'), ('ETH', 'ethereum', 'ETH')]
 
-# "Bitcoin above ___ on September 11?" -> terminal esik merdiveni
+# "Bitcoin above ___ on September 11?" -> terminal threshold ladder
 TERMINAL = re.compile(r'^(Bitcoin|Ethereum) above ___ on ', re.I)
-# "What price will Bitcoin hit in 2026?" -> TOUCH, karsilastirilmaz
+# "What price will Bitcoin hit in 2026?" -> TOUCH, not comparable
 TOUCH = re.compile(r'\bhit\b', re.I)
 
-VADE_ET = re.compile(r'^(\d+)([A-Z]{3})(\d{2})$')
+EXPIRY_LABEL = re.compile(r'^(\d+)([A-Z]{3})(\d{2})$')
 
 
-def vade_saat(etiket):
-    """Deribit vade etiketi -> (yil, ay, gun). Vadeler 08:00 UTC'de kapanir."""
-    m = VADE_ET.match(etiket)
+def expiry_date(label):
+    """Deribit expiry label -> (year, month, day). Expiries settle 08:00 UTC."""
+    m = EXPIRY_LABEL.match(label)
     if not m:
         return None
-    return (2000 + int(m.group(3)), AY[m.group(2)], int(m.group(1)))
+    return (2000 + int(m.group(3)), MONTH[m.group(2)], int(m.group(1)))
 
 
-def _gun_sayisi(y, ay, g):
-    """Kaba gun sayaci — yalnizca FARK almak icin, takvim dogrulugu gerekmez."""
-    return y * 372 + ay * 31 + g
+def _day_number(y, mo, d):
+    """Coarse day counter — only ever used for DIFFERENCES, so calendar
+    accuracy is not required."""
+    return y * 372 + mo * 31 + d
 
 
-def esik_coz(market):
-    """groupItemTitle'dan sayisal esik. '70,000' -> 70000.0"""
-    ham = (market.get('groupItemTitle') or '').replace(',', '').replace('$', '').strip()
-    m = re.search(r'\d+(?:\.\d+)?', ham)
+def parse_threshold(market):
+    """Numeric threshold from groupItemTitle. '70,000' -> 70000.0"""
+    raw = (market.get('groupItemTitle') or '').replace(',', '').replace('$', '').strip()
+    m = re.search(r'\d+(?:\.\d+)?', raw)
     if not m:
         return None
     return float(m.group(0))
 
 
-def merdiven(olay, ch, idx):
-    """Bir Polymarket terminal merdiveninin butun basamaklari."""
-    M = [m for m in (olay.get('markets') or []) if m.get('active') and not m.get('closed')]
+def ladder(event, ch, idx):
+    """Every rung of one Polymarket terminal ladder."""
+    M = [m for m in (event.get('markets') or []) if m.get('active') and not m.get('closed')]
     if len(M) < 3:
         return None
 
-    bitis = (olay.get('endDate') or '')[:10]
-    if len(bitis) < 10:
+    end = (event.get('endDate') or '')[:10]
+    if len(end) < 10:
         return None
-    hy, hay, hg = int(bitis[:4]), int(bitis[5:7]), int(bitis[8:10])
-    hedef = _gun_sayisi(hy, hay, hg)
+    target = _day_number(int(end[:4]), int(end[5:7]), int(end[8:10]))
 
-    # Boslugu EN KUCUK olan vade secilir; yonu ve buyuklugu raporlanir.
-    uygun = []
+    # The expiry with the SMALLEST gap is chosen; its direction and size are
+    # both reported.
+    usable = []
     for v in ch:
         if not (ch[v].get('C') and ch[v].get('P')):
             continue
-        vs = vade_saat(v)
-        if not vs:
+        ed = expiry_date(v)
+        if not ed:
             continue
-        uygun.append((abs(_gun_sayisi(*vs) - hedef), _gun_sayisi(*vs) - hedef, v))
-    if not uygun:
+        usable.append((abs(_day_number(*ed) - target), _day_number(*ed) - target, v))
+    if not usable:
         return None
-    uygun.sort()
-    _, gun_farki, vade = uygun[0]
-    # Polymarket 16:00 UTC, Deribit 08:00 UTC -> ayni gun ise opsiyon 8 saat once
-    saat_boslugu = gun_farki * 24 - 8
+    usable.sort()
+    _, day_gap, expiry = usable[0]
+    # Polymarket 16:00 UTC, Deribit 08:00 UTC -> same day means 8 hours earlier
+    gap_hours = day_gap * 24 - 8
 
-    F = forward(ch, vade, idx)
+    F = forward(ch, expiry, idx)
     if not F:
         return None
 
-    satirlar = []
+    rows = []
     for m in M:
-        K = esik_coz(m)
+        K = parse_threshold(m)
         if K is None:
             continue
         bid, ask = m.get('bestBid'), m.get('bestAsk')
         if bid is None or ask is None:
             continue
-        d = dijital(ch, vade, K, F, idx)
+        d = digital(ch, expiry, K, F, idx)
         if not d:
-            satirlar.append({'K': K, 'sessiz': 'strike araligi disinda'})
+            rows.append({'K': K, 'skipped': 'outside the strike range'})
             continue
         pm = (float(bid) + float(ask)) / 2
-        mk = float(ask) - float(bid)
-        # Polymarket maker ucreti 0 kabul ediliyor (kullanici karari).
-        surt = d['fee'] + mk / 2
-        esik = (0 if d['se'] is None else 1.96 * d['se']) + surt
-        satirlar.append({'K': K, 'pm': pm, 'opt': d['p'], 'fark': pm - d['p'],
-                         'esik': esik, 'mk': mk,
-                         'asiyor': abs(pm - d['p']) > esik})
-    if not satirlar:
+        spread = float(ask) - float(bid)
+        # Polymarket maker fee is treated as 0 (user's decision).
+        friction = d['fee'] + spread / 2
+        threshold = (0 if d['se'] is None else 1.96 * d['se']) + friction
+        rows.append({'K': K, 'pm': pm, 'opt': d['p'], 'gap': pm - d['p'],
+                     'threshold': threshold, 'spread': spread,
+                     'exceeds': abs(pm - d['p']) > threshold})
+    if not rows:
         return None
-    return {'satirlar': satirlar, 'vade': vade, 'bosluk_saat': saat_boslugu,
-            'baslik': olay.get('title'), 'bitis': bitis}
+    return {'rows': rows, 'expiry': expiry, 'gap_hours': gap_hours,
+            'title': event.get('title'), 'end': end}
 
 
-def kosu(damga):
-    g = anlik_goruntu(damga)
+def run(stamp):
+    g = snapshot(stamp)
     PM, D = g.polymarket, g.deribit
-    cikti = {'damga': damga, 'merdivenler': [], 'elenen_touch': 0}
-    for varlik, anahtar, para in VARLIKLAR:
+    out = {'stamp': stamp, 'ladders': [], 'touch_excluded': 0}
+    for asset, key, currency in ASSETS:
         try:
-            ch, idx = zincir(D, para)
+            ch, idx = chain(D, currency)
         except (KeyError, TypeError):
             continue
-        for olay in (PM.get(anahtar) or []):
-            baslik = olay.get('title') or ''
-            if TOUCH.search(baslik):
-                cikti['elenen_touch'] += 1
+        for event in (PM.get(key) or []):
+            title = event.get('title') or ''
+            if TOUCH.search(title):
+                out['touch_excluded'] += 1
                 continue
-            if not TERMINAL.match(baslik):
+            if not TERMINAL.match(title):
                 continue
             try:
-                h = merdiven(olay, ch, idx)
+                h = ladder(event, ch, idx)
             except (KeyError, TypeError, ValueError):
                 continue
             if h:
-                h['varlik'] = varlik
-                cikti['merdivenler'].append(h)
-    return cikti
+                h['asset'] = asset
+                out['ladders'].append(h)
+    return out
 
 
 def main():
     argv = sys.argv[1:]
-    son = int(argv[argv.index('--son') + 1]) if '--son' in argv else None
-    hepsi = anlar('_meta')
-    if son:
-        hepsi = hepsi[-son:]
+    last = int(argv[argv.index('--last') + 1]) if '--last' in argv else None
+    every = stamps('_meta')
+    if last:
+        every = every[-last:]
 
-    o = ozet()
-    kar = Kararlilik()
-    print('POLYMARKET TERMINAL MERDIVENLERI — ucuncu bagimsiz kurulum')
-    print('arsiv: %(anlik_goruntu_sayisi)d anlik goruntu / %(gun_sayisi)d gun' % o)
+    o = summary()
+    stab = Stability()
+    print('POLYMARKET TERMINAL LADDERS — third independent setup')
+    print('archive: %(snapshot_count)d snapshots / %(day_count)d days' % o)
     print()
     print('%-18s %-4s %-30s %5s %6s %s' %
-          ('an', 'var', 'merdiven', 'bosl', 'asan', '(asan/olculen)'))
+          ('snapshot', 'ast', 'ladder', 'gap', 'over', '(over/measured)'))
     print('-' * 86)
 
-    top_asan = top_olculen = 0
-    dar_asan = dar_olculen = 0      # bosluk <= 12 saat olanlar
-    touch_elenen = 0
-    gosterilen = 0
+    tot_over = tot_measured = 0
+    near_over = near_measured = 0      # ladders with a gap of 12h or less
+    touch_excluded = 0
+    shown = 0
 
-    for damga in hepsi:
+    for stamp in every:
         try:
-            s = kosu(damga)
-        except Eksik:
+            s = run(stamp)
+        except Missing:
             continue
-        touch_elenen += s['elenen_touch']
-        for h in s['merdivenler']:
-            olculen = [r for r in h['satirlar'] if 'opt' in r]
-            if not olculen:
+        touch_excluded += s['touch_excluded']
+        for h in s['ladders']:
+            measured = [r for r in h['rows'] if 'opt' in r]
+            if not measured:
                 continue
-            asan = sum(1 for r in olculen if r['asiyor'])
-            for r in olculen:
-                # kimlik: varlik + merdivenin vadesi + esik. Gunluk merdivenler
-                # her gun yenilendigi icin cogu basamak az sayida gozlenir;
-                # kararlilik ozeti bunu oldugu gibi gosterir.
-                kar.ekle('%s:%s:%g' % (h['varlik'], h['bitis'], r['K']), r['asiyor'])
-            top_asan += asan
-            top_olculen += len(olculen)
-            if abs(h['bosluk_saat']) <= 12:
-                dar_asan += asan
-                dar_olculen += len(olculen)
-            if gosterilen < 24:      # log'u bogmadan ornek goster
+            over = sum(1 for r in measured if r['exceeds'])
+            for r in measured:
+                # identity: asset + ladder expiry + threshold. Daily ladders are
+                # replaced every day, so most rungs are observed only a few
+                # times; the stability summary shows that as it is.
+                stab.add('%s:%s:%g' % (h['asset'], h['end'], r['K']), r['exceeds'])
+            tot_over += over
+            tot_measured += len(measured)
+            if abs(h['gap_hours']) <= 12:
+                near_over += over
+                near_measured += len(measured)
+            if shown < 24:      # a sample, without flooding the log
                 print('%-18s %-4s %-30s %+5dh %6s %d/%d' %
-                      (damga, h['varlik'], (h['baslik'] or '')[:30],
-                       h['bosluk_saat'], '', asan, len(olculen)))
-                gosterilen += 1
+                      (stamp, h['asset'], (h['title'] or '')[:30],
+                       h['gap_hours'], '', over, len(measured)))
+                shown += 1
 
     print('-' * 86)
     print()
-    print('TOPLAM     : %d / %d basamak-gozlemi bandi asti' % (top_asan, top_olculen))
-    if top_olculen:
-        print('             %.1f%%' % (100.0 * top_asan / top_olculen))
-    print('BOSLUK<=12h: %d / %d' % (dar_asan, dar_olculen))
-    if dar_olculen:
-        print('             %.1f%%  <- vade boslugu kucukken de ayni mi?'
-              % (100.0 * dar_asan / dar_olculen))
-    kar.yaz('KARARLILIK — Polymarket gunluk esikleri')
+    print('TOTAL      : %d / %d rung-observations cleared the band'
+          % (tot_over, tot_measured))
+    if tot_measured:
+        print('             %.1f%%' % (100.0 * tot_over / tot_measured))
+    print('GAP <= 12h : %d / %d' % (near_over, near_measured))
+    if near_measured:
+        print('             %.1f%%  <- still the same with a small expiry gap?'
+              % (100.0 * near_over / near_measured))
+    stab.report('STABILITY — Polymarket daily thresholds')
     print()
-    print('elenen touch merdiveni: %d  ("hit" sorulari terminal DEGILDIR)' % touch_elenen)
+    print('touch ladders excluded: %d  ("hit" questions are NOT terminal)'
+          % touch_excluded)
     print()
-    print('CEKINCE: Polymarket 16:00 UTC / Binance BTC-USDT kapanisi ile,')
-    print('Deribit 08:00 UTC / Deribit endeksi ile cozuluyor. Hem zaman hem')
-    print('kaynak farki var. Opsiyon vadesi daha erken oldugundan dagilim')
-    print('daha dar cikar ve fark BIZIM LEHIMIZE sisebilir. Bu sayi bir')
-    print('firsat sayisi degil, bir karsilastirilabilirlik olcusudur.')
+    print('CAVEAT: Polymarket settles at 16:00 UTC on the Binance BTC-USDT')
+    print('close, Deribit at 08:00 UTC on its own index. Both the time and the')
+    print('source differ. The option expires earlier, so its distribution comes')
+    print('out narrower and the gap can inflate IN OUR FAVOUR. This number is')
+    print('a measure of comparability, not a count of opportunities.')
     return 0
 
 

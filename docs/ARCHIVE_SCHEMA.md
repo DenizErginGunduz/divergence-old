@@ -37,9 +37,14 @@ Most files are gzipped JSON. `coverage` and `_meta` are plain JSON because they 
 small and meant to be read by eye. Trades are NDJSON — one JSON object per line —
 because they are appended per run and line-oriented data survives partial reads.
 
-Field names inside our own files (`coverage`, `_meta`, `findings`) are Turkish. Those
-files are our bookkeeping, not vendor data. Vendor payloads keep their original field
-names untouched.
+Field names inside our own files (the `kalshi` wrapper, `coverage`, `_meta`,
+`findings`) are ours and are in English. Vendor payloads keep the field names the venue
+returned, because those are not ours to relabel.
+
+Snapshots written before archive version 3 carry our fields under their earlier Turkish
+names. `scripts/migrate_archive_keys.py` rewrites them permanently; `scripts/archive.py`
+and `web/index.html` also upgrade them at read time, so nothing downstream ever sees an
+old name. The mapping is in `docs/GLOSSARY.md`.
 
 ---
 
@@ -87,20 +92,20 @@ still look plausible in a ratio.
 
 ```json
 {
-  "katalog":   { "Crypto": { "series": [...] }, "Financials": { "series": [...] } },
-  "secim":     { "kripto": [...62 series tickers...], "gozlem": [...30...] },
-  "marketler": { "<SERIES_TICKER>": [ ...market objects... ] },
-  "gozlem":    { "<SERIES_TICKER>": [ ... ] }
+  "catalogue": { "Crypto": { "series": [...] }, "Financials": { "series": [...] } },
+  "selection": { "crypto": [...62 series tickers...], "observed": [...30...] },
+  "markets":   { "<SERIES_TICKER>": [ ...market objects... ] },
+  "observed":  { "<SERIES_TICKER>": [ ... ] }
 }
 ```
 
-- `katalog` — the raw series catalogue, as returned. Kept because the series list is
+- `catalogue` — the raw series catalogue, as returned. Kept because the series list is
   derived from it at run time rather than hardcoded. A truncated catalogue response
   once caused 42 of 62 crypto series to be missed, including the annual ladders the
   whole long-horizon measurement depends on.
-- `secim` — which series this run decided to fetch.
-- `marketler` — the measured universe: crypto series.
-- `gozlem` — an observation-only universe (indices, metals, oil). Collected but not
+- `selection` — which series this run decided to fetch.
+- `markets` — the measured universe: crypto series.
+- `observed` — an observation-only universe (indices, metals, oil). Collected but not
   yet measured.
 
 A market object carries 41 fields. The ones the measurements use:
@@ -193,21 +198,23 @@ growing file would re-store the entire history on every commit.
 ## `coverage/` — did we actually get everything?
 
 An array with one entry per market fetched, written so that gaps are auditable instead
-of assumed away. Turkish field names, translated here:
+of assumed away.
 
 | field | meaning |
 |---|---|
-| `cekim_utc` | fetch time |
-| `donen` | rows returned |
-| `yeni` | new after de-duplication |
-| `sayfa` | pages fetched |
-| `limit_doldu` | hit the fetch limit |
-| `sayfalama_calisti` | pagination worked |
-| `ilk_kez` | first time this market was seen |
-| `BOSLUK` | gap detected |
+| `fetched_utc` | fetch time |
+| `returned` | rows returned |
+| `new` | new after de-duplication |
+| `pages` | pages fetched |
+| `oldest_ts` / `newest_ts` | trade timestamp range seen |
+| `previous_watermark` | where the last run stopped |
+| `limit_hit` | hit the fetch limit |
+| `pagination_worked` | pagination returned new rows |
+| `first_time` | first time this market was seen |
+| `GAP` | gap detected |
 
-`limit_doldu` is the field to watch. In the run of 2026-09-11, 148 of 446 markets hit
-the limit while `BOSLUK` was false everywhere. Pagination reported success, so there is
+`limit_hit` is the field to watch. In the run of 2026-09-11, 148 of 446 markets hit
+the limit while `GAP` was false everywhere. Pagination reported success, so there is
 probably no gap — but "probably" is not a measurement, and this has not been verified.
 
 ---
@@ -220,7 +227,7 @@ errors, and a Kalshi summary.
 The field that governs whether a comparison is meaningful:
 
 ```json
-"fiyat_penceresi_saniye": 0.85
+"sync_window_seconds": 0.85
 ```
 
 This is the elapsed time between reading the option chain and reading the prediction
@@ -236,11 +243,11 @@ Written every run so that a reader can find the newest snapshot with one request
 
 ```json
 {
-  "surum": 1,
-  "damga": "2026-09-11T0515Z",
-  "fiyat_penceresi_saniye": 0.85,
-  "yollar": { "kalshi": "raw/kalshi/...", "deribit": "...", "polymarket_events": "..." },
-  "arsiv": { "gun_sayisi": 13, "anlik_goruntu_sayisi": 40 }
+  "version": 2,
+  "stamp": "2026-09-11T0515Z",
+  "sync_window_seconds": 0.85,
+  "paths": { "kalshi": "raw/kalshi/...", "deribit": "...", "polymarket_events": "..." },
+  "archive": { "day_count": 13, "snapshot_count": 40 }
 }
 ```
 
@@ -253,20 +260,20 @@ three times before it broke, and it got worse daily.
 
 ## Reading the archive from Python
 
-Do not parse paths by hand. `scripts/arsiv.py` does it:
+Do not parse paths by hand. `scripts/archive.py` does it:
 
 ```python
-from arsiv import anlik_goruntu, anlar
+from archive import snapshot, stamps
 
-g = anlik_goruntu()                    # newest snapshot
-g = anlik_goruntu('2026-09-10T1312Z')  # a specific one
+g = snapshot()                         # newest snapshot
+g = snapshot('2026-09-10T1312Z')       # a specific one
 
 g.kalshi, g.deribit, g.polymarket      # decompressed JSON
-g.meta, g.pencere, g.damga, g.gun
+g.meta, g.sync_window, g.stamp, g.day
 
-anlar('_meta')                         # every stamp, oldest first
+stamps('_meta')                        # every stamp, oldest first
 ```
 
-A missing stream raises `Eksik` rather than returning empty. Kalshi was added on
+An absent stream raises `Missing` rather than returning empty. Kalshi was added on
 2026-08-31, so the first five snapshots have no Kalshi file; measurements report those
 as unmeasurable instead of silently scoring zero.

@@ -1,71 +1,75 @@
 #!/usr/bin/env python3
-"""Uzun ufuk touch siniri — ucuncu kurulum, ve tek MODEL VARSAYAN olcum.
+"""Long-horizon touch bound — the third setup, and the only one that ASSUMES A
+MODEL.
 
-TOUCH NEDIR, NEDEN ZOR
-"What price will Bitcoin hit in 2026?" sorusu vade icinde HERHANGI BIR AN
-esige degmeyi sorar. Opsiyon zincirinde bunun dogrudan karsiligi YOKTUR.
-Terminal olasilik P(S_T > K) fiyatlardan modelsiz cikar; touch cikmaz.
+WHAT TOUCH IS, AND WHY IT IS HARD
+"What price will Bitcoin hit in 2026?" asks about touching the level at ANY
+moment before expiry. The option chain has NO direct counterpart for that. The
+terminal probability P(S_T > K) falls out of prices model-free; touch does not.
 
-Bu yuzden bu olcum digerlerinden farklidir ve oyle isaretlenir:
-diger iki kurulum MODELSIZ, bu MODEL VARSAYAR.
+So this measurement differs from the others and is labelled as such: the other
+two setups are MODEL-FREE, this one ASSUMES A MODEL.
 
-SINIR
-Driftsiz aritmetik Brown hareketinde yansima ilkesi touch = 2 * terminal
-verir. Gercek dunyada uc varsayim da tutmaz: surukleme sifir degil, izleme
-surekli degil, volatilite tek degil. O yuzden "2" bir sabit DEGILDIR (D-031).
+THE BOUND
+For driftless arithmetic Brownian motion the reflection principle gives
+touch = 2 * terminal. In the real world none of the three assumptions hold:
+drift is not zero, monitoring is not continuous, volatility is not a single
+number. So "2" is NOT a constant (D-031).
 
-Lognormal altinda risk-notr olcude, a = ln(A/F) ve mu = -sigma^2/2 icin:
+Under lognormal dynamics in the risk-neutral measure, with a = ln(A/F) and
+mu = -sigma^2/2:
 
     terminal = N((-a + mu*T) / (sigma*sqrt(T)))
     touch    = terminal + exp(-a) * N((-a - mu*T) / (sigma*sqrt(T)))
 
-Bu bir SINIR verir, nokta tahmini degil. Oran teorik olarak 1 ile 2 arasinda
-olmalidir. Oran 1'in ALTINDAYSA arbitrajsizlik ihlali vardir: bir seviyeye
-vade icinde degme olasiligi, vadede o seviyenin ustunde KAPANMA olasiligindan
-kucuk olamaz. Bu betigin en degerli ciktisi o ihlalleri saymaktir — cunku
-ihlal, modele degil aritmetige aykiridir.
+That gives a BOUND, not a point estimate. The ratio should theoretically sit
+between 1 and 2. A ratio BELOW 1 is a no-arbitrage violation: the probability
+of touching a level before expiry cannot be smaller than the probability of
+CLOSING above it at expiry. Counting those violations is the most valuable
+output of this script — because a violation contradicts arithmetic, not a
+model.
 
-sigma NEREDEN GELIYOR
-Zincirin kendi ima edilen volatilitesinden, esige en yakin iki strike'in
-mark_iv'si arasinda dogrusal interpolasyonla. Bisection ile sigma cozmeyi
-DENEDIK ve elendi: N(d2) yukari strike'larda sigma'da monoton degil,
-cozucu %400'de doyuyordu.
+WHERE sigma COMES FROM
+From the chain's own implied volatility, linearly interpolated between the two
+strikes nearest the threshold. Solving for sigma by bisection was TRIED and
+rejected: N(d2) is not monotone in sigma at upper strikes, and the solver
+saturated at 400%.
 
-Kullanim:
+Usage:
     python scripts/measure_touch.py
-    python scripts/measure_touch.py --son 5
+    python scripts/measure_touch.py --last 5
 """
 import math
 import re
 import sys
 
-from arsiv import anlik_goruntu, anlar, ozet, Eksik
-from measure_band import forward, dijital, AY
-from kararlilik import Kararlilik
+from archive import snapshot, stamps, summary, Missing
+from measure_band import forward, digital, MONTH
+from stability import Stability
 
-VARLIKLAR = [('BTC', 'bitcoin', 'BTC'), ('ETH', 'ethereum', 'ETH')]
-TOUCH_BASLIK = re.compile(r'What price will (Bitcoin|Ethereum) hit', re.I)
-VADE_ET = re.compile(r'^(\d+)([A-Z]{3})(\d{2})$')
+ASSETS = [('BTC', 'bitcoin', 'BTC'), ('ETH', 'ethereum', 'ETH')]
+TOUCH_TITLE = re.compile(r'What price will (Bitcoin|Ethereum) hit', re.I)
+EXPIRY_LABEL = re.compile(r'^(\d+)([A-Z]{3})(\d{2})$')
 
 
 def _norm(x):
-    """Standart normal kumulatif — scipy yok, erf yeterli."""
+    """Standard normal CDF — no scipy, erf is enough."""
     return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
 
 
-def zincir_iv(D, para):
-    """Deribit zinciri + her strike'in ima edilen volatilitesi.
-    measure_band.zincir mark_iv tasimiyor; touch icin sigma sart."""
-    idx = D[para]['index']['result']['index_price']
-    bs = D[para]['book_summary']
+def chain_iv(D, currency):
+    """Deribit chain plus each strike's implied volatility.
+    measure_band.chain does not carry mark_iv; touch needs sigma."""
+    idx = D[currency]['index']['result']['index_price']
+    bs = D[currency]['book_summary']
     bs = bs['result'] if isinstance(bs, dict) else bs
     ch = {}
     for b in bs:
         q = b['instrument_name'].split('-')
         if len(q) != 4:
             continue
-        vade, strike, tur = q[1], float(q[2]), q[3]
-        ch.setdefault(vade, {}).setdefault(tur, {})[strike] = {
+        expiry, strike, kind = q[1], float(q[2]), q[3]
+        ch.setdefault(expiry, {}).setdefault(kind, {})[strike] = {
             'mark': (b.get('mark_price') or 0) * idx,
             'bid': b['bid_price'] * idx if b.get('bid_price') else None,
             'ask': b['ask_price'] * idx if b.get('ask_price') else None,
@@ -74,154 +78,159 @@ def zincir_iv(D, para):
     return ch, idx
 
 
-def vade_gun(etiket):
-    m = VADE_ET.match(etiket)
+def expiry_day(label):
+    m = EXPIRY_LABEL.match(label)
     if not m:
         return None
-    return (2000 + int(m.group(3))) * 372 + AY[m.group(2)] * 31 + int(m.group(1))
+    return (2000 + int(m.group(3))) * 372 + MONTH[m.group(2)] * 31 + int(m.group(1))
 
 
-def sigma_interp(o, K):
-    """Esigi saran iki strike'in IV'si arasinda dogrusal interpolasyon."""
+def sigma_at(o, K):
+    """Linear interpolation between the IVs of the two strikes bracketing K."""
     ks = sorted(k for k in o if o[k].get('iv'))
     if not ks:
         return None
-    alt = [k for k in ks if k <= K]
-    ust = [k for k in ks if k >= K]
-    if not alt or not ust:
-        # esik zincirin disinda: en yakin ucu kullan, ama uydurma yapma
+    below = [k for k in ks if k <= K]
+    above = [k for k in ks if k >= K]
+    if not below or not above:
+        # the threshold is outside the chain: use the nearest end, invent nothing
         return o[ks[0]]['iv'] if K < ks[0] else o[ks[-1]]['iv']
-    a, b = alt[-1], ust[0]
+    a, b = below[-1], above[0]
     if a == b:
         return o[a]['iv']
     w = (K - a) / (b - a)
     return o[a]['iv'] * (1 - w) + o[b]['iv'] * w
 
 
-def touch_sinir(A, F, sigma, T):
-    """Lognormal altinda terminal ve touch. A: esik, F: forward."""
+def touch_bound(A, F, sigma, T):
+    """Terminal and touch under lognormal. A: threshold, F: forward."""
     if sigma <= 0 or T <= 0 or F <= 0 or A <= 0:
         return None
     a = math.log(A / F)
     mu = -0.5 * sigma * sigma
-    kok = sigma * math.sqrt(T)
-    terminal = _norm((-a + mu * T) / kok)
-    touch = terminal + math.exp(-a) * _norm((-a - mu * T) / kok)
+    root = sigma * math.sqrt(T)
+    terminal = _norm((-a + mu * T) / root)
+    touch = terminal + math.exp(-a) * _norm((-a - mu * T) / root)
     return {'terminal': terminal, 'touch': min(touch, 1.0)}
 
 
-def kosu(damga, kar):
-    g = anlik_goruntu(damga)
+def run(stamp, stab):
+    g = snapshot(stamp)
     PM, D = g.polymarket, g.deribit
-    sonuc = {'damga': damga, 'olcum': 0, 'ihlal': 0, 'band_disi': 0}
-    for varlik, anahtar, para in VARLIKLAR:
+    out = {'stamp': stamp, 'measured': 0, 'violations': 0, 'over_two': 0}
+    for asset, key, currency in ASSETS:
         try:
-            ch, idx = zincir_iv(D, para)
+            ch, idx = chain_iv(D, currency)
         except (KeyError, TypeError):
             continue
-        for olay in (PM.get(anahtar) or []):
-            baslik = olay.get('title') or ''
-            if not TOUCH_BASLIK.search(baslik):
+        for event in (PM.get(key) or []):
+            title = event.get('title') or ''
+            if not TOUCH_TITLE.search(title):
                 continue
-            bitis = (olay.get('endDate') or '')[:10]
-            if len(bitis) < 10:
+            end = (event.get('endDate') or '')[:10]
+            if len(end) < 10:
                 continue
-            hedef = int(bitis[:4]) * 372 + int(bitis[5:7]) * 31 + int(bitis[8:10])
+            target = int(end[:4]) * 372 + int(end[5:7]) * 31 + int(end[8:10])
 
-            uygun = [(abs(vade_gun(v) - hedef), v) for v in ch
-                     if ch[v].get('C') and ch[v].get('P') and vade_gun(v)]
-            if not uygun:
+            usable = [(abs(expiry_day(v) - target), v) for v in ch
+                      if ch[v].get('C') and ch[v].get('P') and expiry_day(v)]
+            if not usable:
                 continue
-            uygun.sort()
-            fark_gun, vade = uygun[0]
-            F = forward(ch, vade, idx)
+            usable.sort()
+            day_gap, expiry = usable[0]
+            F = forward(ch, expiry, idx)
             if not F:
                 continue
-            # vadeye kalan sure: hedef gun - olcum gunu
-            bugun = int(damga[:4]) * 372 + int(damga[5:7]) * 31 + int(damga[8:10])
-            T = max((hedef - bugun), 1) / 365.0
+            # time to expiry: target day - measurement day
+            today = int(stamp[:4]) * 372 + int(stamp[5:7]) * 31 + int(stamp[8:10])
+            T = max((target - today), 1) / 365.0
 
-            for m in (olay.get('markets') or []):
+            for m in (event.get('markets') or []):
                 if not (m.get('active') and not m.get('closed')):
                     continue
-                ham = (m.get('groupItemTitle') or '').replace(',', '').replace('$', '')
-                mm = re.search(r'\d+(?:\.\d+)?', ham)
+                raw = (m.get('groupItemTitle') or '').replace(',', '').replace('$', '')
+                mm = re.search(r'\d+(?:\.\d+)?', raw)
                 bid, ask = m.get('bestBid'), m.get('bestAsk')
                 if not mm or bid is None or ask is None:
                     continue
                 A = float(mm.group(0))
-                if A <= F:        # asagi yonlu touch ayri bir hesap, kapsam disi
+                if A <= F:        # downside touch is a separate computation, out of scope
                     continue
-                # TERMINAL MODELSIZ olmali. Onceki surumde lognormal terminal
-                # kullaniliyordu ve sonuc "aritmetik ihlal" diye etiketleniyordu;
-                # yanlisti. Lognormal bir modeldir, ona aykirilik modeli curutur,
-                # aritmetigi degil. Gercek ihlal icin terminal opsiyon
-                # fiyatlarindan dogrudan cikmali (D-025 dijital yaklasimi).
-                d = dijital(ch, vade, A, F, idx)
+                # The TERMINAL side must be MODEL-FREE. An earlier version used a
+                # lognormal terminal and labelled the result an "arithmetic
+                # violation"; that was wrong. Lognormal is a model, and a
+                # contradiction with it refutes the model, not arithmetic. For a
+                # real violation the terminal has to come straight from option
+                # prices (the D-025 digital approach).
+                d = digital(ch, expiry, A, F, idx)
                 if not d or d['p'] <= 0:
                     continue
                 pm = (float(bid) + float(ask)) / 2
                 if pm <= 0:
                     continue
                 terminal = d['p']
-                oran = pm / terminal
-                sonuc['olcum'] += 1
-                # IHLAL: vade icinde degme olasiligi, vadede ustunde kapanma
-                # olasiligindan KUCUK olamaz. Terminal modelsiz oldugu icin
-                # bu gercekten aritmetiktir.
-                if oran < 1.0:
-                    sonuc['ihlal'] += 1
-                # Driftsiz sinir 2'dir ama "2" bir sabit DEGILDIR (D-031).
-                if oran > 2.0:
-                    sonuc['band_disi'] += 1
-                kar.ekle('%s:%s:%g' % (varlik, bitis, A), oran > 2.0)
-    return sonuc
+                ratio = pm / terminal
+                out['measured'] += 1
+                # VIOLATION: the probability of touching before expiry cannot be
+                # smaller than the probability of closing above at expiry. Since
+                # the terminal is model-free, this really is arithmetic.
+                if ratio < 1.0:
+                    out['violations'] += 1
+                # The driftless bound is 2, but "2" is NOT a constant (D-031).
+                if ratio > 2.0:
+                    out['over_two'] += 1
+                stab.add('%s:%s:%g' % (asset, end, A), ratio > 2.0)
+    return out
 
 
 def main():
     argv = sys.argv[1:]
-    son = int(argv[argv.index('--son') + 1]) if '--son' in argv else None
-    hepsi = anlar('_meta')
-    if son:
-        hepsi = hepsi[-son:]
+    last = int(argv[argv.index('--last') + 1]) if '--last' in argv else None
+    every = stamps('_meta')
+    if last:
+        every = every[-last:]
 
-    o = ozet()
-    kar = Kararlilik()
-    print('UZUN UFUK TOUCH SINIRI — MODEL VARSAYAN olcum')
-    print('arsiv: %(anlik_goruntu_sayisi)d anlik goruntu / %(gun_sayisi)d gun' % o)
+    o = summary()
+    stab = Stability()
+    print('LONG-HORIZON TOUCH BOUND — a MODEL-ASSUMING measurement')
+    print('archive: %(snapshot_count)d snapshots / %(day_count)d days' % o)
     print()
-    print('%-18s %8s %8s %10s' % ('an', 'olcum', 'ihlal', 'oran>2'))
+    print('%-18s %8s %8s %10s' % ('snapshot', 'measured', 'violate', 'ratio>2'))
     print('-' * 48)
 
-    t_olcum = t_ihlal = t_band = 0
-    for damga in hepsi:
+    t_measured = t_violations = t_over = 0
+    for stamp in every:
         try:
-            s = kosu(damga, kar)
-        except Eksik:
+            s = run(stamp, stab)
+        except Missing:
             continue
-        if not s['olcum']:
+        if not s['measured']:
             continue
-        print('%-18s %8d %8d %10d' % (damga, s['olcum'], s['ihlal'], s['band_disi']))
-        t_olcum += s['olcum']; t_ihlal += s['ihlal']; t_band += s['band_disi']
+        print('%-18s %8d %8d %10d'
+              % (stamp, s['measured'], s['violations'], s['over_two']))
+        t_measured += s['measured']
+        t_violations += s['violations']
+        t_over += s['over_two']
 
     print('-' * 48)
-    print('TOPLAM %8d olcum, %d aritmetik ihlal, %d oran>2'
-          % (t_olcum, t_ihlal, t_band))
-    if t_olcum:
-        print('       ihlal orani %.1f%%  (touch < terminal: MUMKUN DEGIL)'
-              % (100.0 * t_ihlal / t_olcum))
-        print('       oran>2     %.1f%%  (lognormal sinirin ustu)'
-              % (100.0 * t_band / t_olcum))
-    kar.yaz('KARARLILIK — oran>2 olan esikler')
+    print('TOTAL  %8d measurements, %d arithmetic violations, %d with ratio>2'
+          % (t_measured, t_violations, t_over))
+    if t_measured:
+        print('       violation rate %.1f%%  (touch < terminal: IMPOSSIBLE)'
+              % (100.0 * t_violations / t_measured))
+        print('       ratio>2        %.1f%%  (above the lognormal bound)'
+              % (100.0 * t_over / t_measured))
+    stab.report('STABILITY — thresholds with ratio>2')
 
     print()
-    print('ORAN = prediction market touch fiyati / MODELSIZ terminal dijital.')
-    print('Terminal opsiyon fiyatlarindan dogrudan cikiyor, model varsayilmiyor.')
+    print('RATIO = prediction-market touch price / MODEL-FREE terminal digital.')
+    print('The terminal comes straight from option prices; no model is assumed.')
     print('')
-    print('oran < 1 : ARITMETIK ihlal. Vade icinde degme, vadede ustunde')
-    print('           kapanmadan az olamaz. Modele degil mantiga aykiri.')
-    print('oran > 2 : driftsiz Brown sinirinin ustu. Bu daha ZAYIF bir')
-    print('           iddiadir, cunku "2" bir sabit degildir (D-031).')
+    print('ratio < 1 : ARITHMETIC violation. Touching before expiry cannot be')
+    print('            rarer than closing above at expiry. Contradicts logic,')
+    print('            not a model.')
+    print('ratio > 2 : above the driftless Brownian bound. This is a WEAKER')
+    print('            claim, because "2" is not a constant (D-031).')
     return 0
 
 

@@ -1,14 +1,14 @@
 name: ref-check
 
-# Karar referanslarini denetler: belgelerde veya arayuzde anilan her D-XXX
-# numarasinin DECISIONS.md'de bir karsiligi olmali.
+# Checks decision references: every D-XXX number mentioned in the docs or the
+# interface must have a counterpart in DECISIONS.md.
 #
-# Neden var: arayuzdeki bulgu kartlari "D-049", "D-045 · D-046 · D-066" basiyordu
-# ama o kararlar hic yazilmamisti. Ekran var olmayan kayitlara atif yapiyordu ve
-# bunu kod degil, bir insan fark etti. Bu is akisi ayni seyin sessizce
-# tekrarlanmasini engelliyor.
+# Why it exists: the finding cards in the interface printed "D-049" and
+# "D-045 . D-046 . D-066" while those decisions had never been written. The
+# screen was citing records that did not exist, and a human noticed it, not the
+# code. This workflow stops the same thing recurring quietly.
 #
-# Toplayiciya dokunmaz, ag erisimi istemez, saniyeler surer.
+# It does not touch the collector, needs no network access, and takes seconds.
 
 on:
   push:
@@ -27,27 +27,26 @@ jobs:
         with:
           python-version: '3.12'
 
-      # Once denetleyicinin YAKALAYABILDIGINI kanitla. Hicbir seyi yakalamayan
-      # bir denetleyici de yesil kalir; o yuzden bu adim asil denetimden once.
-      # Her Python dosyasi derlenebiliyor mu? Bu adim her push'ta kosuyor.
+      # Does every Python file compile? This step runs on every push.
       #
-      # Neden var: 2026-09-11'de collect.py'ye yarim kalmis bir satir islendi
-      # (kirpilmis yapistirma, kapanmamis string). Toplayici 5 kosu boyunca
-      # cokerek gecti ve iki gun boyunca hic anlik goruntu alinamadi. Kimse
-      # fark etmedi, cunku hicbir sey kirmizi yanmiyordu — zamanlanmis kosu
-      # sessizce basarisiz oluyordu.
+      # Why it exists: on 2026-09-11 a half-finished line was committed to
+      # collect.py (a truncated paste, an unterminated string). The collector
+      # crashed through 5 runs and no snapshot was taken for two days. Nobody
+      # noticed, because nothing was red — the scheduled run was failing
+      # silently.
       #
-      # Sozdizimi hatasi en ucuz yakalanan hata turudur; onu bir sonraki
-      # zamanlanmis kosuya birakmak en pahali secimdir.
-      - name: Python dosyalari derleniyor mu
+      # A syntax error is the cheapest class of error to catch; leaving it for
+      # the next scheduled run is the most expensive choice available.
+      - name: Do the Python files compile
         run: |
           python -m compileall -q collector scripts
-          echo 'butun dosyalar derlendi'
+          echo 'all files compiled'
 
-      - name: Denetleyicinin kendi testi
-        run: python scripts/ref_check.py --kendi-testi
+      # First prove the checker CAN CATCH. A checker that catches nothing also
+      # stays green, so this step comes before the real check.
+      - name: Checker self-test
+        run: python scripts/ref_check.py --self-test
 
-      # Asili referans varsa cikis 1 -> kosu kirmizi.
-      # KAYIT KAYIP yer tutuculari hata degil; sayilir ve loglanir.
-      - name: Karar referanslarini denetle
-        run: python scripts/ref_check.py --liste
+      # A dangling reference exits 1 -> the run goes red.
+      - name: Check decision references
+        run: python scripts/ref_check.py --list

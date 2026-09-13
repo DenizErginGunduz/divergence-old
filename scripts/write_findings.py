@@ -1,145 +1,155 @@
 #!/usr/bin/env python3
-"""Olcum sonuclarini findings/latest.json'a yazar.
+"""Writes the measurement results to findings/latest.json.
 
-NEDEN DOSYAYA YAZIYORUZ
-1. Log okunmuyor. GitHub is akisi loglarini API'den cekmek yonetici yetkisi
-   istiyor, arayuzdeki log gorunumu sanallastirilmis. Sonuc ortada duruyor
-   ama erisilemiyor — yani pratikte yok.
-2. Ekran buradan beslenecek. Sitedeki "kayitli olcum" kartlari bugune kadar
-   elle yazilmisti ve hicbiri yeniden uretilemiyordu. Bundan sonra ayni
-   dosyayi hem kayit hem ekran okuyacak; ikisi yapisal olarak ayrilamaz.
-3. Tarih birikir. Her kosu bir onceki sonucu degistirirse, sayinin ne zaman
-   ve hangi arsiv uzerinde uretildigi kaybolur. Dosya bunu tasiyor.
+WHY TO A FILE
+1. Nobody reads logs. Pulling GitHub workflow logs from the API needs admin
+   rights, and the log view in the UI is virtualised. The result exists but
+   cannot be reached — which in practice means it does not exist.
+2. The page will be fed from here. The "recorded measurement" cards on the site
+   were hand-written until now and none of them could be reproduced. From here
+   on the record and the screen read the same file; the two cannot drift apart
+   structurally.
+3. History accumulates. If every run overwrote the previous result, when a
+   number was produced and against which archive would be lost. The file
+   carries that.
 
-ONEMLI: bu betik OLCMUYOR, olcum modullerini CAGIRIYOR. Hesap tek yerde
-durur; burada yalnizca toplama ve yazma vardir.
+IMPORTANT: this script does not MEASURE, it CALLS the measurement modules. The
+arithmetic lives in one place; here there is only collection and writing.
 """
 import json
 import os
 import sys
 
-from arsiv import anlar, ozet, Eksik
+from archive import stamps, summary, Missing
 import measure_band
 import measure_polymarket
 import measure_touch
-from kararlilik import Kararlilik
+from stability import Stability
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-def kararlilik_ozet(kar):
-    o = kar.ozet()
+def stability_summary(stab):
+    o = stab.summary()
     return {
-        'farkli_basamak': o['farkli_basamak'],
-        'toplam_gozlem': o['toplam_gozlem'],
-        'basamak_basina_gozlem': round(o['ort_gozlem'], 1),
-        'her_zaman_asan': len(o['hep']),
-        'bazen_asan': len(o['bazen']),
-        'hic_asmayan': len(o['hic']),
-        'her_zaman_asanlar': [{'basamak': str(a), 'gozlem': n, 'asan': x}
-                              for a, n, x in o['hep'][:20]],
+        'distinct_rungs': o['distinct_rungs'],
+        'total_observations': o['total_observations'],
+        'observations_per_rung': round(o['observations_per_rung'], 1),
+        'always_exceeds': len(o['always']),
+        'sometimes_exceeds': len(o['sometimes']),
+        'never_exceeds': len(o['never']),
+        'always_exceeding_list': [{'rung': str(a), 'observations': n, 'exceeding': x}
+                                  for a, n, x in o['always'][:20]],
     }
 
 
-def band_olc(anlar_listesi):
-    kar = Kararlilik()
-    asan = olculen = 0
-    yogunluk = []
-    for d in anlar_listesi:
+def measure_band_all(all_stamps):
+    stab = Stability()
+    exceeding = measured = 0
+    density = []
+    for d in all_stamps:
         try:
-            s = measure_band.kosu(d, kar)
-        except Eksik:
+            s = measure_band.run(d, stab)
+        except Missing:
             continue
-        for v in s['seriler'].values():
-            if 'hata' in v:
+        for v in s['series'].values():
+            if 'error' in v:
                 continue
-            asan += v['asan']; olculen += v['olculen']
-            yogunluk.append(v['yogunluk_toplami'])
+            exceeding += v['exceeding']
+            measured += v['measured']
+            density.append(v['density_sum'])
     return {
-        'asan': asan, 'olculen': olculen,
-        'oran': round(100.0 * asan / olculen, 1) if olculen else None,
-        'yogunluk_ort': round(sum(yogunluk) / len(yogunluk), 4) if yogunluk else None,
-        'kararlilik': kararlilik_ozet(kar),
+        'exceeding': exceeding, 'measured': measured,
+        'percent': round(100.0 * exceeding / measured, 1) if measured else None,
+        'mean_density': round(sum(density) / len(density), 4) if density else None,
+        'stability': stability_summary(stab),
     }
 
 
-def polymarket_olc(anlar_listesi):
-    kar = Kararlilik()
-    asan = olculen = 0
-    dar_asan = dar_olculen = 0
-    touch_elenen = 0
-    for d in anlar_listesi:
+def measure_polymarket_all(all_stamps):
+    stab = Stability()
+    exceeding = measured = 0
+    near_exceeding = near_measured = 0
+    touch_excluded = 0
+    for d in all_stamps:
         try:
-            s = measure_polymarket.kosu(d)
-        except Eksik:
+            s = measure_polymarket.run(d)
+        except Missing:
             continue
-        touch_elenen += s['elenen_touch']
-        for h in s['merdivenler']:
-            ol = [r for r in h['satirlar'] if 'opt' in r]
-            if not ol:
+        touch_excluded += s['touch_excluded']
+        for h in s['ladders']:
+            rows = [r for r in h['rows'] if 'opt' in r]
+            if not rows:
                 continue
-            a = sum(1 for r in ol if r['asiyor'])
-            asan += a; olculen += len(ol)
-            if abs(h['bosluk_saat']) <= 12:
-                dar_asan += a; dar_olculen += len(ol)
-            for r in ol:
-                kar.ekle('%s:%s:%g' % (h['varlik'], h['bitis'], r['K']), r['asiyor'])
+            a = sum(1 for r in rows if r['exceeds'])
+            exceeding += a
+            measured += len(rows)
+            if abs(h['gap_hours']) <= 12:
+                near_exceeding += a
+                near_measured += len(rows)
+            for r in rows:
+                stab.add('%s:%s:%g' % (h['asset'], h['end'], r['K']), r['exceeds'])
     return {
-        'asan': asan, 'olculen': olculen,
-        'oran': round(100.0 * asan / olculen, 1) if olculen else None,
-        'bosluk_12h_asan': dar_asan, 'bosluk_12h_olculen': dar_olculen,
-        'bosluk_12h_oran': round(100.0 * dar_asan / dar_olculen, 1) if dar_olculen else None,
-        'elenen_touch_merdiveni': touch_elenen,
-        'kararlilik': kararlilik_ozet(kar),
+        'exceeding': exceeding, 'measured': measured,
+        'percent': round(100.0 * exceeding / measured, 1) if measured else None,
+        'gap_12h_exceeding': near_exceeding, 'gap_12h_measured': near_measured,
+        'gap_12h_percent': round(100.0 * near_exceeding / near_measured, 1)
+        if near_measured else None,
+        'touch_ladders_excluded': touch_excluded,
+        'stability': stability_summary(stab),
     }
 
 
-def touch_olc(anlar_listesi):
-    kar = Kararlilik()
-    olcum = ihlal = band_disi = 0
-    for d in anlar_listesi:
+def measure_touch_all(all_stamps):
+    stab = Stability()
+    measured = violations = over_two = 0
+    for d in all_stamps:
         try:
-            s = measure_touch.kosu(d, kar)
-        except Eksik:
+            s = measure_touch.run(d, stab)
+        except Missing:
             continue
-        olcum += s['olcum']; ihlal += s['ihlal']; band_disi += s['band_disi']
+        measured += s['measured']
+        violations += s['violations']
+        over_two += s['over_two']
     return {
-        'olcum': olcum, 'aritmetik_ihlal': ihlal, 'oran_2_ustu': band_disi,
-        'ihlal_orani': round(100.0 * ihlal / olcum, 1) if olcum else None,
-        'oran_2_ustu_orani': round(100.0 * band_disi / olcum, 1) if olcum else None,
-        'kararlilik': kararlilik_ozet(kar),
-        'not': ('Terminal MODELSIZ dijitalden geliyor. "oran>2" driftsiz Brown '
-                'sinirinin ustu demek; "2" bir sabit degildir (D-031), bu yuzden '
-                'zayif bir iddiadir. "oran<1" ise aritmetik ihlaldir.'),
+        'measured': measured, 'arithmetic_violations': violations,
+        'ratio_over_two': over_two,
+        'violation_percent': round(100.0 * violations / measured, 1) if measured else None,
+        'ratio_over_two_percent': round(100.0 * over_two / measured, 1) if measured else None,
+        'stability': stability_summary(stab),
+        'note': ('The terminal comes from a MODEL-FREE digital. "ratio>2" means '
+                 'above the driftless Brownian bound; "2" is not a constant '
+                 '(D-031), so that is a weak claim. "ratio<1" is an arithmetic '
+                 'violation.'),
     }
 
 
 def main():
-    hepsi = anlar('_meta')
-    o = ozet()
-    print('olcum basliyor: %d anlik goruntu' % len(hepsi))
+    all_stamps = stamps('_meta')
+    o = summary()
+    print('measuring: %d snapshots' % len(all_stamps))
 
-    sonuc = {
-        'arsiv': o,
-        'uretildi': 'scripts/write_findings.py',
-        'olcumler': {
-            'surtunme_bandi_kalshi': band_olc(hepsi),
-            'polymarket_terminal': polymarket_olc(hepsi),
-            'uzun_ufuk_touch': touch_olc(hepsi),
+    result = {
+        'archive': o,
+        'produced_by': 'scripts/write_findings.py',
+        'measurements': {
+            'friction_band_kalshi': measure_band_all(all_stamps),
+            'polymarket_terminal': measure_polymarket_all(all_stamps),
+            'long_horizon_touch': measure_touch_all(all_stamps),
         },
     }
 
-    hedef = os.path.join(ROOT, 'findings')
-    os.makedirs(hedef, exist_ok=True)
-    yol = os.path.join(hedef, 'latest.json')
-    with open(yol, 'w', encoding='utf-8') as f:
-        json.dump(sonuc, f, ensure_ascii=False, indent=1)
+    folder = os.path.join(ROOT, 'findings')
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, 'latest.json')
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(result, f, ensure_ascii=False, indent=1)
 
-    print('yazildi: findings/latest.json')
-    for ad, m in sonuc['olcumler'].items():
-        k = m.get('kararlilik', {})
-        print('  %-26s farkli basamak %-4s her zaman asan %-4s'
-              % (ad, k.get('farkli_basamak'), k.get('her_zaman_asan')))
+    print('written: findings/latest.json')
+    for name, m in result['measurements'].items():
+        k = m.get('stability', {})
+        print('  %-26s distinct rungs %-4s always exceeding %-4s'
+              % (name, k.get('distinct_rungs'), k.get('always_exceeds')))
     return 0
 
 
