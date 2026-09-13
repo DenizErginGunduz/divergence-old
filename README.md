@@ -118,6 +118,25 @@ actionable; as far as this has been measured, there isn't one.
 
 ---
 
+## Licence
+
+Three different things live here and they are not under one licence.
+
+| what | licence |
+|---|---|
+| Code — `collector/`, `scripts/`, `web/` | [MIT](LICENSE) |
+| Writing — `docs/`, this README | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) |
+| Market data — `raw/` | **not ours, and not licensed by us** |
+
+The data belongs to Kalshi, Polymarket and Deribit and is subject to their terms.
+We hold no rights in it and grant none. `raw/README.md` has the links and
+`docs/DATA_SOURCES.md` records what those terms say and the position we took.
+
+Take the code and do what you like with it. Quote the methodology with attribution.
+For the data, go to the venues.
+
+---
+
 ## Status
 
 Working: collector (25 of 25 recent runs clean), archive, three model-free
