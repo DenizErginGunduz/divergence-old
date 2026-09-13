@@ -1,0 +1,82 @@
+name: migrate-archive-keys
+
+# One-off: rewrite the archive's own field names into English.
+#
+# Manual trigger only, and it does nothing unless you type APPLY. The default is
+# a dry run that prints what would change and writes nothing.
+#
+# What makes it safe to run: the measurement is the proof. The job measures the
+# archive BEFORE the migration, migrates, measures AGAIN, and diffs the two
+# outputs. The data did not change, only the labels did, so the numbers have to
+# be identical. If they are not, the job fails and nothing is committed.
+#
+# Vendor payloads are not touched. See scripts/migrate_archive_keys.py.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type APPLY to write. Anything else is a dry run.'
+        required: true
+        default: 'dry-run'
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Archive read smoke test
+        run: python scripts/archive.py
+
+      # The baseline. Kept as a file so the comparison is mechanical, not visual.
+      - name: Measure before
+        run: |
+          python scripts/write_findings.py
+          cp findings/latest.json /tmp/before.json
+
+      - name: Dry run
+        run: python scripts/migrate_archive_keys.py
+
+      - name: Apply
+        if: github.event.inputs.confirm == 'APPLY'
+        run: python scripts/migrate_archive_keys.py --apply
+
+      - name: Measure after
+        if: github.event.inputs.confirm == 'APPLY'
+        run: |
+          python scripts/write_findings.py
+          cp findings/latest.json /tmp/after.json
+
+      # The whole point of the job. Same archive, same logic, same numbers.
+      - name: The numbers must be identical
+        if: github.event.inputs.confirm == 'APPLY'
+        run: |
+          if diff -q /tmp/before.json /tmp/after.json; then
+            echo 'findings identical before and after the migration'
+          else
+            echo 'FINDINGS CHANGED. The migration touched something it should not have.'
+            diff /tmp/before.json /tmp/after.json || true
+            exit 1
+          fi
+
+      - name: Commit
+        if: github.event.inputs.confirm == 'APPLY'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add raw/ findings/
+          if git diff --staged --quiet; then
+            echo "nothing to commit"
+          else
+            git commit -m "archive: own field names migrated to English (version 3)"
+            git push
+          fi
